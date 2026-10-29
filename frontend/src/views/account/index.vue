@@ -9,13 +9,13 @@
       </el-col>
       <el-col :xs="12" :sm="8" :lg="6">
         <div class="summary-card">
-          <div class="summary-label">总成本</div>
+          <div class="summary-label">订单成本</div>
           <div class="summary-value cost">￥{{ money(summary.cost) }}</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="8" :lg="6">
         <div class="summary-card">
-          <div class="summary-label">总利润</div>
+          <div class="summary-label">订单毛利</div>
           <div class="summary-value profit">￥{{ money(summary.profit) }}</div>
         </div>
       </el-col>
@@ -363,6 +363,10 @@ export default {
     }
   },
   created() {
+    const tab = this.$route.query.tab
+    if (['chat', 'table', 'progress', 'cost'].indexOf(tab) > -1) {
+      this.activeView = tab
+    }
     this.getList()
     this.getSummary()
   },

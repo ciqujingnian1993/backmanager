@@ -229,6 +229,8 @@ export default {
     }
   },
   created() {
+    const keyword = this.$route.query.keyword
+    if (keyword) this.listQuery.keyword = keyword
     this.refresh()
   },
   methods: {

@@ -43,6 +43,36 @@ COST_CATEGORIES = ["采购", "物流", "人工", "房租", "水电", "推广", "
 PROGRESS_STATUS = ("pending", "doing", "done", "blocked")
 
 
+def biz_month_key(biz_date, fallback=None):
+    """把各种写法的业务日期（2026-10-29 / 10/29 / 2026年10月29日）归一到 YYYY-MM。"""
+    text = str(biz_date or "").strip()
+    if text:
+        head = (
+            text.replace("/", "-")
+            .replace(".", "-")
+            .replace("年", "-")
+            .replace("月", "-")
+            .replace("日", "")
+        )
+        parts = [part for part in head.split("-") if part.strip().isdigit()]
+        if len(parts) >= 3 and len(parts[0]) == 4:
+            return "%04d-%02d" % (int(parts[0]), int(parts[1]))
+        if len(parts) == 2:
+            month = int(parts[0])
+            now = datetime.now()
+            year = now.year - 1 if month > now.month + 6 else now.year
+            return "%04d-%02d" % (year, month)
+    if fallback is not None:
+        return fallback.strftime("%Y-%m")
+    return ""
+
+
+def shift_month(base, offset):
+    year = base.year + (base.month - 1 + offset) // 12
+    month = (base.month - 1 + offset) % 12 + 1
+    return datetime(year, month, 1)
+
+
 class UploadedFile:
     def __init__(self, filename, data):
         self.filename = filename
@@ -637,6 +667,8 @@ class App(BaseHTTPRequestHandler):
             self.account_detail(query)
         elif path == "/vue-element-admin/account/summary" and method == "GET":
             self.account_summary()
+        elif path == "/vue-element-admin/dashboard/overview" and method == "GET":
+            self.dashboard_overview()
         elif path == "/vue-element-admin/account/create" and method == "POST":
             self.account_create(body, user)
         elif path == "/vue-element-admin/account/update" and method == "POST":
@@ -1401,6 +1433,205 @@ class App(BaseHTTPRequestHandler):
                 "by_category": by_category,
                 "by_date": by_date,
                 "categories": COST_CATEGORIES,
+            },
+        })
+
+    def dashboard_overview(self):
+        """首页分析：KPI、近 6 个月趋势、收入/成本结构、订单进度分布、待办清单。"""
+
+        def money(value):
+            return round(float(value or 0), 2)
+
+        now = datetime.now()
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM account_records ORDER BY id DESC")
+                accounts = cur.fetchall()
+                cur.execute("SELECT * FROM cost_records")
+                costs = cur.fetchall()
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (account_id) account_id, step, status, note, timestamp
+                      FROM order_progress
+                     ORDER BY account_id, timestamp DESC, id DESC
+                    """
+                )
+                latest = {row["account_id"]: row for row in cur.fetchall()}
+                cur.execute("SELECT account_id, COUNT(*) AS cnt FROM order_progress GROUP BY account_id")
+                counts = {row["account_id"]: int(row["cnt"] or 0) for row in cur.fetchall()}
+
+        months = [shift_month(now, offset).strftime("%Y-%m") for offset in range(-5, 1)]
+        trend = {key: {"revenue": 0.0, "cost": 0.0, "profit": 0.0, "orders": 0} for key in months}
+
+        revenue_total = 0.0
+        order_cost_total = 0.0
+        by_category = {}
+        by_status = {"pending": 0, "doing": 0, "done": 0}
+        by_client = {}
+
+        for row in accounts:
+            revenue = float(row["revenue"] or 0)
+            cost = float(row["cost"] or 0)
+            revenue_total += revenue
+            order_cost_total += cost
+            month = biz_month_key(row["biz_date"], row.get("created_at"))
+            if month in trend:
+                trend[month]["revenue"] += revenue
+                trend[month]["cost"] += cost
+                trend[month]["orders"] += 1
+            category = (row["category"] or "").strip() or "未分类"
+            bucket = by_category.setdefault(
+                category, {"name": category, "revenue": 0.0, "cost": 0.0, "profit": 0.0, "count": 0}
+            )
+            bucket["revenue"] += revenue
+            bucket["cost"] += cost
+            bucket["profit"] += revenue - cost
+            bucket["count"] += 1
+            status = row["status"] or "pending"
+            by_status[status] = by_status.get(status, 0) + 1
+            client = (row["client"] or "").strip() or "散客"
+            client_bucket = by_client.setdefault(
+                client, {"client": client, "revenue": 0.0, "profit": 0.0, "orders": 0}
+            )
+            client_bucket["revenue"] += revenue
+            client_bucket["profit"] += revenue - cost
+            client_bucket["orders"] += 1
+
+        extra_cost_total = 0.0
+        cost_by_category = {}
+        for row in costs:
+            amount = float(row["amount"] or 0)
+            extra_cost_total += amount
+            month = biz_month_key(row["biz_date"], row.get("created_at"))
+            if month in trend:
+                trend[month]["cost"] += amount
+            category = (row["category"] or "").strip() or "未分类"
+            bucket = cost_by_category.setdefault(category, {"name": category, "amount": 0.0, "count": 0})
+            bucket["amount"] += amount
+            bucket["count"] += 1
+
+        for key in months:
+            trend[key]["profit"] = trend[key]["revenue"] - trend[key]["cost"]
+
+        total_cost = order_cost_total + extra_cost_total
+        profit_total = revenue_total - total_cost
+        orders = len(accounts)
+        current, previous = months[-1], months[-2]
+        month_revenue = trend[current]["revenue"]
+        prev_revenue = trend[previous]["revenue"]
+        growth = round((month_revenue - prev_revenue) / prev_revenue * 100, 1) if prev_revenue else None
+
+        now_ts = now.timestamp()
+        todos = []
+        for row in accounts:
+            last = latest.get(row["id"])
+            step = (last["step"] if last else "") or ""
+            progress_status = (last["status"] if last else "") or ""
+            if (row["status"] or "") == "done" or step == "已完成":
+                continue
+            stamp = int((last["timestamp"] if last else row["timestamp"]) or 0)
+            stamp_sec = stamp / 1000.0 if stamp > 1e11 else float(stamp)
+            days = max(0, int((now_ts - stamp_sec) // 86400)) if stamp else 0
+            if progress_status == "blocked":
+                level, reason = "danger", "进度受阻"
+            elif last is None:
+                level, reason = "danger", "还没有跟进记录"
+            elif days >= 7:
+                level, reason = "danger", "已 %d 天未更新" % days
+            elif days >= 3:
+                level, reason = "warning", "已 %d 天未更新" % days
+            else:
+                level, reason = "normal", "正常推进"
+            if step in PROGRESS_STEPS:
+                index = PROGRESS_STEPS.index(step)
+                next_step = PROGRESS_STEPS[index + 1] if index + 1 < len(PROGRESS_STEPS) else "已完成"
+            else:
+                next_step = PROGRESS_STEPS[1]
+            revenue = float(row["revenue"] or 0)
+            cost = float(row["cost"] or 0)
+            todos.append({
+                "id": row["id"],
+                "client": row["client"] or "",
+                "items": row["items"] or "",
+                "category": row["category"] or "",
+                "biz_date": row["biz_date"] or "",
+                "status": row["status"] or "pending",
+                "revenue": money(revenue),
+                "profit": money(revenue - cost),
+                "last_step": step,
+                "last_status": progress_status,
+                "last_note": (last["note"] if last else "") or "",
+                "next_step": next_step,
+                "progress_count": counts.get(row["id"], 0),
+                "days": days,
+                "level": level,
+                "reason": reason,
+            })
+        level_rank = {"danger": 0, "warning": 1, "normal": 2}
+        todos.sort(key=lambda item: (level_rank[item["level"]], -item["days"], -item["revenue"]))
+
+        step_counter = {}
+        for row in latest.values():
+            step_counter[row["step"]] = step_counter.get(row["step"], 0) + 1
+        step_dist = [
+            {"step": step, "count": step_counter.get(step, 0)}
+            for step in PROGRESS_STEPS
+            if step_counter.get(step, 0)
+        ]
+
+        self.send_json({
+            "code": 20000,
+            "data": {
+                "kpi": {
+                    "revenue": money(revenue_total),
+                    "order_cost": money(order_cost_total),
+                    "extra_cost": money(extra_cost_total),
+                    "total_cost": money(total_cost),
+                    "profit": money(profit_total),
+                    "margin": round(profit_total / revenue_total * 100, 1) if revenue_total else 0,
+                    "orders": orders,
+                    "avg_ticket": money(revenue_total / orders) if orders else 0,
+                    "month_revenue": money(month_revenue),
+                    "month_cost": money(trend[current]["cost"]),
+                    "month_profit": money(trend[current]["profit"]),
+                    "month_growth": growth,
+                    "open_orders": len(todos),
+                    "risk_orders": len([item for item in todos if item["level"] == "danger"]),
+                    "pending_orders": by_status.get("pending", 0),
+                },
+                "trend": {
+                    "months": months,
+                    "revenue": [money(trend[key]["revenue"]) for key in months],
+                    "cost": [money(trend[key]["cost"]) for key in months],
+                    "profit": [money(trend[key]["profit"]) for key in months],
+                    "orders": [trend[key]["orders"] for key in months],
+                },
+                "revenue_by_category": sorted(
+                    [{**item, "revenue": money(item["revenue"]), "cost": money(item["cost"]),
+                      "profit": money(item["profit"])} for item in by_category.values()],
+                    key=lambda item: item["revenue"],
+                    reverse=True,
+                ),
+                "cost_by_category": sorted(
+                    [{"name": "订单直接成本", "amount": money(order_cost_total), "count": orders}]
+                    + [{**item, "amount": money(item["amount"])} for item in cost_by_category.values()],
+                    key=lambda item: item["amount"],
+                    reverse=True,
+                ),
+                "status_dist": [
+                    {"key": "pending", "name": "待定", "count": by_status.get("pending", 0)},
+                    {"key": "doing", "name": "进行中", "count": by_status.get("doing", 0)},
+                    {"key": "done", "name": "已完成", "count": by_status.get("done", 0)},
+                ],
+                "step_dist": step_dist,
+                "todos": todos[:20],
+                "top_clients": sorted(
+                    [{**item, "revenue": money(item["revenue"]), "profit": money(item["profit"])}
+                     for item in by_client.values()],
+                    key=lambda item: item["revenue"],
+                    reverse=True,
+                )[:6],
+                "recent": [account_out(row) for row in accounts[:8]],
             },
         })
 
