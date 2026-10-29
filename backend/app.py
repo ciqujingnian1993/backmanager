@@ -26,7 +26,7 @@ ARTICLE_FIELDS = [
 ]
 
 ACCOUNT_FIELDS = [
-    "timestamp", "biz_date", "category", "client", "items", "unit_price", "quantity",
+    "timestamp", "biz_date", "category", "client", "platform", "items", "unit_price", "quantity",
     "revenue", "cost", "profit", "status", "remark", "creator",
 ]
 
@@ -267,6 +267,7 @@ def account_out(row):
         "cost": None if row["cost"] is None else float(row["cost"]),
         "profit": None if row["profit"] is None else float(row["profit"]),
         "status": row["status"] or "pending",
+        "platform": row["platform"] or "",
         "completed_at": int(row["completed_at"]) if row.get("completed_at") else None,
         "remark": row["remark"] or "",
         "creator": row["creator"] or "",
@@ -413,6 +414,7 @@ def init_db():
             biz_date text,
             category text,
             client text,
+            platform text,
             items text,
             unit_price numeric,
             quantity numeric DEFAULT 1,
@@ -427,6 +429,9 @@ def init_db():
         """,
         """
         ALTER TABLE account_records ADD COLUMN IF NOT EXISTS completed_at bigint
+        """,
+        """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS platform text
         """,
         """
         CREATE TABLE IF NOT EXISTS order_progress (
@@ -475,6 +480,15 @@ def init_db():
             created_at timestamptz NOT NULL DEFAULT now()
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS platforms (
+            id serial PRIMARY KEY,
+            name text UNIQUE NOT NULL,
+            sort integer NOT NULL DEFAULT 0,
+            remark text DEFAULT '',
+            created_at timestamptz NOT NULL DEFAULT now()
+        )
+        """,
     ]
     with connect() as conn:
         with conn.cursor() as cur:
@@ -485,6 +499,7 @@ def init_db():
                 seed(cur)
             sync_account_route(cur)
             seed_menus(cur)
+            seed_platforms(cur)
         conn.commit()
 
 
@@ -494,10 +509,27 @@ MENU_SEED = [
     ("/account/index", "订单列表", "money", "", 10),
     ("/progress/index", "订单进度", "tree", "", 20),
     ("/cost/index", "成本管理", "money", "", 30),
+    ("/platform/index", "平台管理", "shopping", "", 40),
     ("/system/user", "用户管理", "user", "/system", 10),
     ("/system/role", "角色管理", "lock", "/system", 20),
     ("/system/menu", "菜单管理", "list", "/system", 30),
 ]
+
+
+# 平台字典的预置项（属于基础配置，不是业务数据，可在「平台管理」里增删改）
+PLATFORM_SEED = ["微信", "抖音", "小红书", "淘宝", "拼多多", "京东", "线下"]
+
+
+def seed_platforms(cur):
+    for index, name in enumerate(PLATFORM_SEED):
+        cur.execute(
+            """
+            INSERT INTO platforms (name, sort, remark)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (name) DO NOTHING
+            """,
+            (name, (index + 1) * 10, "预置"),
+        )
 
 
 def seed_menus(cur):
@@ -714,6 +746,14 @@ class App(BaseHTTPRequestHandler):
             self.menu_update(body, user)
         elif path == "/vue-element-admin/menu/delete" and method == "POST":
             self.menu_delete(body, user)
+        elif path == "/vue-element-admin/platform/list" and method == "GET":
+            self.platform_list(query)
+        elif path == "/vue-element-admin/platform/create" and method == "POST":
+            self.platform_create(body, user)
+        elif path == "/vue-element-admin/platform/update" and method == "POST":
+            self.platform_update(body, user)
+        elif path == "/vue-element-admin/platform/delete" and method == "POST":
+            self.platform_delete(body, user)
         elif path == "/vue-element-admin/search/user" and method == "GET":
             self.search_user(query)
         elif path == "/vue-element-admin/transaction/list" and method == "GET":
@@ -1106,6 +1146,9 @@ class App(BaseHTTPRequestHandler):
         if query.get("category"):
             where.append("category = %s")
             params.append(query["category"])
+        if query.get("platform"):
+            where.append("platform = %s")
+            params.append(query["platform"])
         sql = "SELECT * FROM account_records"
         if where:
             sql += " WHERE " + " AND ".join(where)
@@ -1196,6 +1239,7 @@ class App(BaseHTTPRequestHandler):
             "biz_date": biz_date,
             "category": pick("category"),
             "client": pick("client"),
+            "platform": pick("platform"),
             "items": pick("items"),
             "unit_price": unit_price,
             "quantity": quantity,
@@ -1879,6 +1923,108 @@ class App(BaseHTTPRequestHandler):
         with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM menus WHERE id = %s", (int(body.get("id") or 0),))
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    # ---------------- 平台管理 ----------------
+
+    def platform_list(self, query=None):
+        keyword = (query or {}).get("keyword", "").strip()
+        where_sql = ""
+        params = []
+        if keyword:
+            where_sql = " WHERE name ILIKE %s OR remark ILIKE %s"
+            keyword = "%" + keyword + "%"
+            params = [keyword, keyword]
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT p.*,
+                           (SELECT COUNT(*) FROM account_records a WHERE a.platform = p.name) AS order_count
+                      FROM platforms p
+                    """ + where_sql + " ORDER BY p.sort ASC, p.id ASC",
+                    params,
+                )
+                rows = cur.fetchall()
+        items = [{
+            "id": row["id"],
+            "name": row["name"],
+            "sort": int(row["sort"] or 0),
+            "remark": row["remark"] or "",
+            "order_count": int(row["order_count"] or 0),
+        } for row in rows]
+        self.send_json({"code": 20000, "data": items})
+
+    def platform_create(self, body, user):
+        if not self.is_admin(user):
+            self.deny("仅管理员可新增平台")
+            return
+        name = (body.get("name") or "").strip()
+        if not name:
+            self.send_json({"code": 50000, "message": "平台名称不能为空"})
+            return
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM platforms WHERE name = %s", (name,))
+                if cur.fetchone():
+                    self.send_json({"code": 50000, "message": "平台已存在"})
+                    return
+                cur.execute(
+                    "INSERT INTO platforms (name, sort, remark) VALUES (%s, %s, %s)",
+                    (name, int(body.get("sort") or 0), body.get("remark") or ""),
+                )
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    def platform_update(self, body, user):
+        if not self.is_admin(user):
+            self.deny("仅管理员可修改平台")
+            return
+        platform_id = int(body.get("id") or 0)
+        name = (body.get("name") or "").strip()
+        if not platform_id or not name:
+            self.send_json({"code": 50000, "message": "平台信息不完整"})
+            return
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM platforms WHERE name = %s AND id <> %s", (name, platform_id))
+                if cur.fetchone():
+                    self.send_json({"code": 50000, "message": "平台名称已存在"})
+                    return
+                cur.execute(
+                    "UPDATE platforms SET name = %s, sort = %s, remark = %s WHERE id = %s",
+                    (name, int(body.get("sort") or 0), body.get("remark") or "", platform_id),
+                )
+                if cur.rowcount == 0:
+                    self.send_json({"code": 50000, "message": "平台不存在"})
+                    return
+                # 订单上存的平台名跟着改，保证统计口径一致
+                if body.get("rename_orders", True):
+                    old = body.get("old_name") or ""
+                    if old and old != name:
+                        cur.execute("UPDATE account_records SET platform = %s WHERE platform = %s", (name, old))
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    def platform_delete(self, body, user):
+        if not self.is_admin(user):
+            self.deny("仅管理员可删除平台")
+            return
+        platform_id = int(body.get("id") or 0)
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT name FROM platforms WHERE id = %s", (platform_id,))
+                row = cur.fetchone()
+                if row is None:
+                    self.send_json({"code": 50000, "message": "平台不存在"})
+                    return
+                # 仅当没有订单使用该平台时才允许删除，避免历史订单的平台名失效
+                cur.execute("SELECT COUNT(*) AS total FROM account_records WHERE platform = %s", (row["name"],))
+                if cur.fetchone()["total"] > 0:
+                    self.send_json({"code": 50000, "message": "该平台已有订单使用，无法删除，可改为停用名称或在订单里调整"})
+                    return
+                cur.execute("DELETE FROM platforms WHERE id = %s", (platform_id,))
             conn.commit()
         self.send_json({"code": 20000, "data": {"status": "success"}})
 

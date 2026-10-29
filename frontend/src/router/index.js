@@ -130,6 +130,21 @@ export const asyncRoutes = [
     ]
   },
   {
+    path: '/platform',
+    component: Layout,
+    redirect: '/platform/index',
+    name: 'PlatformManageMenu',
+    meta: { title: '平台管理', icon: 'shopping' },
+    children: [
+      {
+        path: 'index',
+        component: () => import('@/views/platform/index'),
+        name: 'PlatformManage',
+        meta: { title: '平台管理', icon: 'shopping', breadcrumb: false, roles: ['admin'] }
+      }
+    ]
+  },
+  {
     path: '/system',
     component: Layout,
     redirect: '/system/user',

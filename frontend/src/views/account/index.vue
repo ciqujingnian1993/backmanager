@@ -46,6 +46,15 @@
         <el-option label="进行中" value="doing" />
         <el-option label="已完成" value="done" />
       </el-select>
+      <el-select
+        v-model="listQuery.platform"
+        class="filter-item"
+        placeholder="来源平台"
+        clearable
+        @change="handleFilter"
+      >
+        <el-option v-for="item in platformOptions" :key="item" :label="item" :value="item" />
+      </el-select>
       <el-button
         class="filter-item"
         type="primary"
@@ -103,6 +112,12 @@
           <el-table-column prop="biz_date" label="日期" width="100" align="center" />
           <el-table-column prop="category" label="行业" width="100" align="center" />
           <el-table-column prop="client" label="客户" min-width="120" show-overflow-tooltip />
+          <el-table-column label="平台" width="90" align="center">
+            <template slot-scope="{ row }">
+              <el-tag v-if="row.platform" size="mini" effect="plain">{{ row.platform }}</el-tag>
+              <span v-else class="muted-text">—</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="items" label="业务项" min-width="120" show-overflow-tooltip />
           <el-table-column label="单价" width="90" align="center">
             <template slot-scope="{ row }">{{ amount(row.unit_price) }}</template>
@@ -151,16 +166,16 @@
     <el-dialog
       :title="dialogType === 'edit' ? '编辑订单' : '新增订单'"
       :visible.sync="dialogVisible"
-      width="640px"
+      width="720px"
     >
       <el-form
         ref="accountForm"
         :model="form"
         :rules="rules"
-        label-width="100px"
+        label-width="88px"
       >
         <el-row :gutter="16">
-          <el-col :span="12">
+          <el-col :span="8">
             <el-form-item label="业务日期" prop="biz_date">
               <el-date-picker
                 v-model="form.biz_date"
@@ -172,7 +187,7 @@
               />
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :span="8">
             <el-form-item label="行业" prop="category">
               <el-select
                 v-model="form.category"
@@ -188,6 +203,19 @@
                   :label="item"
                   :value="item"
                 />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="来源平台" prop="platform">
+              <el-select
+                v-model="form.platform"
+                style="width: 100%"
+                clearable
+                filterable
+                placeholder="可不选"
+              >
+                <el-option v-for="item in platformOptions" :key="item" :label="item" :value="item" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -310,6 +338,7 @@ import {
   updateAccount,
   deleteAccount
 } from '@/api/account'
+import { fetchPlatformList } from '@/api/platform'
 
 const STATUS_MAP = {
   pending: '待定',
@@ -335,11 +364,13 @@ export default {
         pending: 0
       },
       categoryOptions: ['同行业', '代理记账', '工商注册', '变更注销'],
+      platformOptions: [],
       listQuery: {
         page: 1,
         limit: 20,
         keyword: '',
-        status: ''
+        status: '',
+        platform: ''
       },
       dialogVisible: false,
       dialogType: 'create',
@@ -365,8 +396,17 @@ export default {
     if (keyword) this.listQuery.keyword = keyword
     this.getList()
     this.getSummary()
+    this.loadPlatforms()
   },
   methods: {
+    async loadPlatforms() {
+      try {
+        const { data } = await fetchPlatformList()
+        this.platformOptions = (data || []).map(item => item.name)
+      } catch (error) {
+        this.platformOptions = []
+      }
+    },
     emptyForm() {
       const now = new Date()
       const month = String(now.getMonth() + 1).padStart(2, '0')
@@ -376,6 +416,7 @@ export default {
         biz_date: `${month}/${day}`,
         category: '',
         client: '',
+        platform: '',
         items: '',
         unit_price: undefined,
         quantity: 1,
@@ -442,6 +483,7 @@ export default {
           biz_date: this.form.biz_date,
           category: this.form.category,
           client: this.form.client,
+          platform: this.form.platform || '',
           items: this.form.items,
           unit_price: this.form.unit_price === undefined ? null : this.form.unit_price,
           quantity: this.form.quantity === undefined ? 1 : this.form.quantity,
@@ -654,6 +696,10 @@ export default {
 
   .danger-text {
     color: #f56c6c;
+  }
+
+  .muted-text {
+    color: #c0c4cc;
   }
 
   .chat-empty {

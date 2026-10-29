@@ -3,6 +3,7 @@ export const PAGE_OPTIONS = [
   { path: '/account/index', label: '订单列表' },
   { path: '/progress/index', label: '订单进度' },
   { path: '/cost/index', label: '成本管理' },
+  { path: '/platform/index', label: '平台管理' },
   { path: '/system/user', label: '用户管理' },
   { path: '/system/role', label: '角色管理' },
   { path: '/system/menu', label: '菜单管理' }
