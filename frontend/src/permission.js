@@ -42,9 +42,16 @@ router.beforeEach(async(to, from, next) => {
           // dynamically add accessible routes
           router.addRoutes(accessRoutes)
 
-          // hack method to ensure that addRoutes is complete
-          // set the replace: true, so the navigation will not leave a history record
-          next({ ...to, replace: true })
+          // 刷新页面或直接打开深链接时，constantRoutes 末尾的 * 兜底会先把地址
+          // 重定向成 /404（此时动态路由还没注册），导致已登录用户一刷新就落到 404。
+          // 这里取 redirect 前的原始地址重新导航，真正不存在的地址仍会回到 404 页。
+          if (to.path === '/404' && to.redirectedFrom) {
+            next({ path: to.redirectedFrom, replace: true })
+          } else {
+            // hack method to ensure that addRoutes is complete
+            // set the replace: true, so the navigation will not leave a history record
+            next({ ...to, replace: true })
+          }
         } catch (error) {
           // remove token and go to login page to re-login
           await store.dispatch('user/resetToken')
@@ -62,7 +69,10 @@ router.beforeEach(async(to, from, next) => {
       next()
     } else {
       // other pages that do not have permission to access are redirected to the login page.
-      next(`/login?redirect=${to.path}`)
+      // 未登录直开深链接时同样会被 * 兜底重定向成 /404，这里取 redirect 前的原始地址，
+      // 登录成功后能回到用户原本想访问的页面
+      const target = to.path === '/404' && to.redirectedFrom ? to.redirectedFrom : to.path
+      next(`/login?redirect=${encodeURIComponent(target)}`)
       NProgress.done()
     }
   }
