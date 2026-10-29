@@ -1,0 +1,25 @@
+# ===== 依赖 =====
+node_modules/
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# ===== 密钥 / 环境配置（切勿上传）=====
+.env
+*.env
+!*.example.env
+
+# ===== 构建产物 =====
+frontend-dist/
+frontend-dist-legacy/
+dist/
+build/
+
+# ===== 临时 / 本地文件 =====
+.tmp/
+.workbuddy/
+.git_backup/
+*.log
+.DS_Store
+Thumbs.db

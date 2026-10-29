@@ -1,0 +1,14 @@
+# /etc/systemd/system/vue-admin-api.service
+[Unit]
+Description=vue-element-admin API
+After=network.target postgresql.service
+
+[Service]
+WorkingDirectory=/root/vue-admin-api
+EnvironmentFile=/root/vue-admin-api/.env
+ExecStart=/usr/bin/python3 /root/vue-admin-api/app.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
