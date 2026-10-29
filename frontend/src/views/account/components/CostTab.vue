@@ -60,7 +60,7 @@
         clearable
         @keyup.enter.native="handleFilter"
       />
-      <el-button class="filter-item" type="primary" icon="el-icon-plus" @click="handleCreate">
+      <el-button v-if="!readonly" class="filter-item" type="primary" icon="el-icon-plus" @click="handleCreate">
         记一笔支出
       </el-button>
       <el-button class="filter-item" icon="el-icon-refresh" @click="refresh">刷新</el-button>
@@ -95,7 +95,7 @@
       </el-table-column>
       <el-table-column prop="remark" label="备注" min-width="150" />
       <el-table-column prop="creator" label="记录人" width="100" align="center" />
-      <el-table-column label="操作" width="170" align="center">
+      <el-table-column v-if="!readonly" label="操作" width="170" align="center">
         <template slot-scope="{ row }">
           <el-button type="primary" size="mini" @click="handleUpdate(row)">编辑</el-button>
           <el-button type="danger" size="mini" @click="handleDelete(row)">删除</el-button>
@@ -221,6 +221,13 @@ const METHOD_OPTIONS = ['微信', '支付宝', '银行转账', '现金', '其他
 export default {
   name: 'CostTab',
   components: { Pagination },
+  props: {
+    // 只读模式：隐藏新增/编辑/删除入口，仅作查询展示
+    readonly: {
+      type: Boolean,
+      default: false
+    }
+  },
   data() {
     const now = new Date()
     const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
