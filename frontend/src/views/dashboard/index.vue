@@ -434,7 +434,7 @@ export default {
       const query = {}
       if (keyword) query.keyword = keyword
       if (target === 'progress') {
-        this.$router.push({ path: '/account/progress', query })
+        this.$router.push({ path: '/progress/index', query })
         return
       }
       if (target === 'table') query.tab = 'table'

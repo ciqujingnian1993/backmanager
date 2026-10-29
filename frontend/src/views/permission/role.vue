@@ -114,11 +114,11 @@ import { fetchRoles, createRole, updateRole, deleteRole } from '@/api/permission
 
 const PAGE_GROUPS = [
   {
-    title: '订单管理',
+    title: '订单',
     pages: [
       { path: '/account/index', label: '订单列表' },
-      { path: '/account/progress', label: '订单进度' },
-      { path: '/account/cost', label: '成本管理' }
+      { path: '/progress/index', label: '订单进度' },
+      { path: '/cost/index', label: '成本管理' }
     ]
   },
   {

@@ -88,26 +88,44 @@ export const asyncRoutes = [
     path: '/account',
     component: Layout,
     redirect: '/account/index',
-    name: 'OrderManage',
-    meta: { title: '订单管理', icon: 'list' },
+    name: 'OrderListMenu',
+    meta: { title: '订单列表', icon: 'money' },
     children: [
       {
         path: 'index',
         component: () => import('@/views/account/index'),
         name: 'OrderList',
-        meta: { title: '订单列表', icon: 'money' }
-      },
+        meta: { title: '订单列表', icon: 'money', breadcrumb: false }
+      }
+    ]
+  },
+  {
+    path: '/progress',
+    component: Layout,
+    redirect: '/progress/index',
+    name: 'OrderProgressMenu',
+    meta: { title: '订单进度', icon: 'tree' },
+    children: [
       {
-        path: 'progress',
+        path: 'index',
         component: () => import('@/views/account/progress'),
         name: 'OrderProgress',
-        meta: { title: '订单进度', icon: 'tree' }
-      },
+        meta: { title: '订单进度', icon: 'tree', breadcrumb: false }
+      }
+    ]
+  },
+  {
+    path: '/cost',
+    component: Layout,
+    redirect: '/cost/index',
+    name: 'CostManageMenu',
+    meta: { title: '成本管理', icon: 'money' },
+    children: [
       {
-        path: 'cost',
+        path: 'index',
         component: () => import('@/views/account/cost'),
         name: 'CostManage',
-        meta: { title: '成本管理', icon: 'money' }
+        meta: { title: '成本管理', icon: 'money', breadcrumb: false }
       }
     ]
   },

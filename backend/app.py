@@ -4,7 +4,7 @@ import json
 import os
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -141,10 +141,11 @@ def now_ms():
 
 
 def format_completed(stamp):
-    """毫秒时间戳 → 「YYYY-MM-DD HH:MM」，用于进度备注等文案。"""
+    """毫秒时间戳 → 「YYYY-MM-DD HH:MM」（按北京时间 UTC+8，服务器本身跑在 UTC）。"""
     if not stamp:
         return ""
-    return datetime.fromtimestamp(int(stamp) / 1000).strftime("%Y-%m-%d %H:%M")
+    moment = datetime.fromtimestamp(int(stamp) / 1000, tz=timezone.utc) + timedelta(hours=8)
+    return moment.strftime("%Y-%m-%d %H:%M")
 
 
 def parse_ms(value):
@@ -1174,8 +1175,15 @@ class App(BaseHTTPRequestHandler):
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql, params)
                 row = cur.fetchone()
+                operator = user["username"] if user else ""
                 # 订单录入的同时自动建一条初始进度，保证每个订单都有进度可跟
-                auto_progress(cur, account_out(row), user["username"] if user else "")
+                auto_progress(cur, account_out(row), operator)
+                # 录入时就标记已完成的，补一条完成记录，保证完成时间在进度里可查
+                if (row["status"] or "") == "done":
+                    insert_progress(
+                        cur, row["id"], "已完成", "done",
+                        "订单已完成，完成时间 " + format_completed(row["completed_at"]), operator,
+                    )
             conn.commit()
         self.send_json({"code": 20000, "data": account_out(row)})
 
