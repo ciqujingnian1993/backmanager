@@ -763,7 +763,7 @@ class App(BaseHTTPRequestHandler):
         elif path == "/vue-element-admin/account/detail" and method == "GET":
             self.account_detail(query)
         elif path == "/vue-element-admin/account/summary" and method == "GET":
-            self.account_summary()
+            self.account_summary(query)
         elif path == "/vue-element-admin/dashboard/overview" and method == "GET":
             self.dashboard_overview()
         elif path == "/vue-element-admin/account/create" and method == "POST":
@@ -1149,6 +1149,11 @@ class App(BaseHTTPRequestHandler):
         if query.get("platform"):
             where.append("platform = %s")
             params.append(query["platform"])
+        if query.get("month"):
+            # biz_date 存 "MM/dd"（历史上有 "YYYY-MM-dd"），两种写法都按月份前缀匹配
+            month = str(query["month"]).split("-")[-1].strip()
+            where.append("(biz_date LIKE %s OR biz_date LIKE %s)")
+            params.extend([month + "/%", "%-" + month + "-%"])
         sql = "SELECT * FROM account_records"
         if where:
             sql += " WHERE " + " AND ".join(where)
@@ -1176,7 +1181,13 @@ class App(BaseHTTPRequestHandler):
             return
         self.send_json({"code": 20000, "data": account_out(row)})
 
-    def account_summary(self):
+    def account_summary(self, query=None):
+        where_sql = ""
+        params = []
+        if query and query.get("month"):
+            month = str(query["month"]).split("-")[-1].strip()
+            where_sql = " WHERE (biz_date LIKE %s OR biz_date LIKE %s)"
+            params = [month + "/%", "%-" + month + "-%"]
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
@@ -1187,7 +1198,8 @@ class App(BaseHTTPRequestHandler):
                            COALESCE(SUM(COALESCE(profit, 0)), 0) AS profit,
                            COUNT(*) FILTER (WHERE profit IS NULL) AS pending
                     FROM account_records
-                    """
+                    """ + where_sql,
+                    params,
                 )
                 row = cur.fetchone()
         self.send_json({

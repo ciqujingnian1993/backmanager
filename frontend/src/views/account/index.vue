@@ -3,31 +3,41 @@
     <el-row :gutter="16" class="summary-row">
       <el-col :xs="12" :sm="8" :lg="6">
         <div class="summary-card">
-          <div class="summary-label">总收入</div>
+          <div class="summary-label">总收入{{ monthSuffix }}</div>
           <div class="summary-value revenue">￥{{ money(summary.revenue) }}</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="8" :lg="6">
         <div class="summary-card">
-          <div class="summary-label">订单成本</div>
+          <div class="summary-label">订单成本{{ monthSuffix }}</div>
           <div class="summary-value cost">￥{{ money(summary.cost) }}</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="8" :lg="6">
         <div class="summary-card">
-          <div class="summary-label">订单毛利</div>
+          <div class="summary-label">订单毛利{{ monthSuffix }}</div>
           <div class="summary-value profit">￥{{ money(summary.profit) }}</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="8" :lg="6">
         <div class="summary-card">
-          <div class="summary-label">待定笔数</div>
+          <div class="summary-label">待定笔数{{ monthSuffix }}</div>
           <div class="summary-value pending">{{ summary.pending }}</div>
         </div>
       </el-col>
     </el-row>
 
     <div class="filter-container">
+      <el-date-picker
+        v-model="listQuery.month"
+        class="filter-item"
+        type="month"
+        placeholder="全部月份"
+        format="yyyy-MM"
+        value-format="yyyy-MM"
+        :clearable="true"
+        @change="handleFilter"
+      />
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
@@ -350,8 +360,11 @@ export default {
   name: 'OrderList',
   components: { Pagination },
   data() {
+    const now = new Date()
+    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
     return {
       activeView: 'chat',
+      currentMonth,
       loading: false,
       saving: false,
       total: 0,
@@ -368,6 +381,7 @@ export default {
       listQuery: {
         page: 1,
         limit: 20,
+        month: currentMonth,
         keyword: '',
         status: '',
         platform: ''
@@ -385,6 +399,9 @@ export default {
   computed: {
     previewMessage() {
       return this.buildMessage(this.form)
+    },
+    monthSuffix() {
+      return this.listQuery.month ? `（${this.listQuery.month}）` : '（全部）'
     }
   },
   created() {
@@ -438,7 +455,9 @@ export default {
       }
     },
     async getSummary() {
-      const { data } = await fetchAccountSummary()
+      const params = {}
+      if (this.listQuery.month) params.month = this.listQuery.month
+      const { data } = await fetchAccountSummary(params)
       this.summary = data
     },
     handleFilter() {

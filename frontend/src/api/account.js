@@ -8,10 +8,11 @@ export function fetchAccountList(query) {
   })
 }
 
-export function fetchAccountSummary() {
+export function fetchAccountSummary(params) {
   return request({
     url: '/vue-element-admin/account/summary',
-    method: 'get'
+    method: 'get',
+    params
   })
 }
 
