@@ -18,7 +18,7 @@
         </div>
         <el-dropdown-menu slot="dropdown">
           <router-link to="/account/index">
-            <el-dropdown-item>记账本</el-dropdown-item>
+            <el-dropdown-item>订单列表</el-dropdown-item>
           </router-link>
           <el-dropdown-item divided @click.native="logout">
             <span style="display:block;">退出登录</span>

@@ -114,9 +114,11 @@ import { fetchRoles, createRole, updateRole, deleteRole } from '@/api/permission
 
 const PAGE_GROUPS = [
   {
-    title: '记账',
+    title: '订单管理',
     pages: [
-      { path: '/account/index', label: '记账本（含进度跟进、成本记录）' }
+      { path: '/account/index', label: '订单列表' },
+      { path: '/account/progress', label: '订单进度' },
+      { path: '/account/cost', label: '成本管理' }
     ]
   },
   {

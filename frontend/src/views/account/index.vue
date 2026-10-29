@@ -52,7 +52,7 @@
         icon="el-icon-plus"
         @click="handleCreate"
       >
-        记一笔
+        新增订单
       </el-button>
       <el-button class="filter-item" icon="el-icon-refresh" @click="getList">
         刷新
@@ -60,9 +60,9 @@
     </div>
 
     <el-tabs v-model="activeView" class="account-tabs" @tab-click="handleTabClick">
-      <el-tab-pane label="记账群" name="chat">
+      <el-tab-pane label="订单动态" name="chat">
         <div class="chat-panel">
-          <div class="chat-title">记账群 ({{ total }})</div>
+          <div class="chat-title">订单动态 ({{ total }})</div>
           <div v-for="item in list" :key="item.id" class="chat-item">
             <div class="chat-time">{{ formatTime(item.timestamp) }}</div>
             <div class="chat-row">
@@ -86,7 +86,7 @@
             </div>
           </div>
           <div v-if="!list.length && !loading" class="chat-empty">
-            还没有记账记录，点击「记一笔」开始记账
+            还没有订单，点击「新增订单」开始录入
           </div>
         </div>
       </el-tab-pane>
@@ -143,17 +143,10 @@
         />
       </el-tab-pane>
 
-      <el-tab-pane label="进度跟进" name="progress" lazy>
-        <progress-tab ref="progressTab" />
-      </el-tab-pane>
-
-      <el-tab-pane label="成本记录" name="cost" lazy>
-        <cost-tab ref="costTab" />
-      </el-tab-pane>
     </el-tabs>
 
     <el-dialog
-      :title="dialogType === 'edit' ? '编辑记账' : '记一笔'"
+      :title="dialogType === 'edit' ? '编辑订单' : '新增订单'"
       :visible.sync="dialogVisible"
       width="640px"
     >
@@ -293,7 +286,7 @@
           />
         </el-form-item>
 
-        <el-form-item label="群消息预览">
+        <el-form-item label="消息预览">
           <div class="preview-bubble">{{ previewMessage }}</div>
         </el-form-item>
       </el-form>
@@ -307,8 +300,6 @@
 
 <script>
 import Pagination from '@/components/Pagination'
-import ProgressTab from './components/ProgressTab'
-import CostTab from './components/CostTab'
 import {
   fetchAccountList,
   fetchAccountSummary,
@@ -324,8 +315,8 @@ const STATUS_MAP = {
 }
 
 export default {
-  name: 'AccountIndex',
-  components: { Pagination, ProgressTab, CostTab },
+  name: 'OrderList',
+  components: { Pagination },
   data() {
     return {
       activeView: 'chat',
@@ -364,9 +355,11 @@ export default {
   },
   created() {
     const tab = this.$route.query.tab
-    if (['chat', 'table', 'progress', 'cost'].indexOf(tab) > -1) {
+    if (['chat', 'table'].indexOf(tab) > -1) {
       this.activeView = tab
     }
+    const keyword = this.$route.query.keyword
+    if (keyword) this.listQuery.keyword = keyword
     this.getList()
     this.getSummary()
   },
@@ -408,18 +401,6 @@ export default {
       this.listQuery.page = 1
       this.getList()
     },
-    handleTabClick(tab) {
-      if (tab.name === 'progress' && this.$refs.progressTab) {
-        this.$refs.progressTab.refresh()
-      }
-      if (tab.name === 'cost' && this.$refs.costTab) {
-        this.$refs.costTab.refresh()
-      }
-    },
-    refreshRelatedTabs() {
-      if (this.$refs.progressTab) this.$refs.progressTab.refresh()
-      if (this.$refs.costTab) this.$refs.costTab.refresh()
-    },
     handleCreate() {
       this.dialogType = 'create'
       this.form = this.emptyForm()
@@ -437,7 +418,7 @@ export default {
       })
     },
     handleDelete(row) {
-      this.$confirm('确认删除这条记账记录吗？', '提示', {
+      this.$confirm('确认删除这条订单吗？', '提示', {
         confirmButtonText: '确定',
         cancelButtonText: '取消',
         type: 'warning'
@@ -447,7 +428,6 @@ export default {
           this.$message({ message: '删除成功', type: 'success' })
           this.getList()
           this.getSummary()
-          this.refreshRelatedTabs()
         })
         .catch(() => {})
     },
@@ -475,13 +455,12 @@ export default {
         request
           .then(() => {
             this.$message({
-              message: this.dialogType === 'edit' ? '保存成功' : '记账成功',
+              message: this.dialogType === 'edit' ? '保存成功' : '订单录入成功，已自动生成进度记录',
               type: 'success'
             })
             this.dialogVisible = false
             this.getList()
             this.getSummary()
-            this.refreshRelatedTabs()
           })
           .finally(() => {
             this.saving = false

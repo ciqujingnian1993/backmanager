@@ -88,14 +88,26 @@ export const asyncRoutes = [
     path: '/account',
     component: Layout,
     redirect: '/account/index',
-    name: 'Accounting',
-    meta: { title: '记账', icon: 'money' },
+    name: 'OrderManage',
+    meta: { title: '订单管理', icon: 'list' },
     children: [
       {
         path: 'index',
         component: () => import('@/views/account/index'),
-        name: 'AccountIndex',
-        meta: { title: '记账本', icon: 'money' }
+        name: 'OrderList',
+        meta: { title: '订单列表', icon: 'money' }
+      },
+      {
+        path: 'progress',
+        component: () => import('@/views/account/progress'),
+        name: 'OrderProgress',
+        meta: { title: '订单进度', icon: 'tree' }
+      },
+      {
+        path: 'cost',
+        component: () => import('@/views/account/cost'),
+        name: 'CostManage',
+        meta: { title: '成本管理', icon: 'money' }
       }
     ]
   },

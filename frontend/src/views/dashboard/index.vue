@@ -148,10 +148,10 @@
       <div v-if="!todos.length" class="empty">没有待办订单，所有订单都已交付完成 🎉</div>
     </el-card>
 
-    <!-- 最近记账 -->
+    <!-- 最近订单 -->
     <el-card shadow="never" class="panel">
       <div slot="header" class="panel-head">
-        <span>最近记账</span>
+        <span>最近订单</span>
         <el-button type="text" @click="goAccount('table')">查看全部</el-button>
       </div>
       <el-table :data="recent" size="medium" style="width: 100%">
@@ -174,7 +174,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <div v-if="!recent.length" class="empty">还没有记账记录，去「记账本」记一笔吧</div>
+      <div v-if="!recent.length" class="empty">还没有订单记录，去「订单列表」新增一笔吧</div>
     </el-card>
   </div>
 </template>
@@ -430,10 +430,14 @@ export default {
         this.loading = false
       }
     },
-    goAccount(tab, keyword) {
+    goAccount(target, keyword) {
       const query = {}
-      if (tab) query.tab = tab
       if (keyword) query.keyword = keyword
+      if (target === 'progress') {
+        this.$router.push({ path: '/account/progress', query })
+        return
+      }
+      if (target === 'table') query.tab = 'table'
       this.$router.push({ path: '/account/index', query })
     },
     money(value) {

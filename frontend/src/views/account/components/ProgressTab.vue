@@ -71,7 +71,7 @@
       <el-table-column label="单号" width="80" align="center">
         <template slot-scope="{ row }">#{{ row.id }}</template>
       </el-table-column>
-      <el-table-column prop="biz_date" label="日期" width="90" align="center" />
+      <el-table-column prop="biz_date" label="日期" width="110" align="center" />
       <el-table-column prop="client" label="客户" min-width="130" />
       <el-table-column prop="items" label="业务项" min-width="130" />
       <el-table-column label="金额" width="110" align="right">
