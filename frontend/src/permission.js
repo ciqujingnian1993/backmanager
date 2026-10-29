@@ -5,6 +5,7 @@ import NProgress from 'nprogress' // progress bar
 import 'nprogress/nprogress.css' // progress bar style
 import { getToken } from '@/utils/auth' // get token from cookie
 import getPageTitle from '@/utils/get-page-title'
+import { PAGE_PATHS } from '@/constants/pages'
 
 NProgress.configure({ showSpinner: false }) // NProgress Configuration
 
@@ -44,13 +45,23 @@ router.beforeEach(async(to, from, next) => {
 
           // 刷新页面或直接打开深链接时，constantRoutes 末尾的 * 兜底会先把地址
           // 重定向成 /404（此时动态路由还没注册），导致已登录用户一刷新就落到 404。
-          // 这里取 redirect 前的原始地址重新导航，真正不存在的地址仍会回到 404 页。
-          if (to.path === '/404' && to.redirectedFrom) {
-            next({ path: to.redirectedFrom, replace: true })
-          } else {
-            // hack method to ensure that addRoutes is complete
+          // 这里取 redirect 前的原始地址重新导航。
+          const target = to.path === '/404' && to.redirectedFrom ? to.redirectedFrom : to.path
+          const resolved = router.resolve(target).route
+          const unreachable = resolved.path === '/404' ||
+            !resolved.matched.length ||
+            resolved.matched.some(record => record.path === '*')
+
+          if (!unreachable) {
             // set the replace: true, so the navigation will not leave a history record
-            next({ ...to, replace: true })
+            next({ path: target, replace: true })
+          } else if (PAGE_PATHS.indexOf(String(target).split('?')[0]) > -1) {
+            // 是系统内置页面但当前账号没有权限：回首页并提示，而不是展示一个莫名其妙的 404
+            Message.warning('当前账号没有该页面的访问权限，已返回首页')
+            next({ path: '/', replace: true })
+          } else {
+            // 地址确实不存在
+            next({ path: '/404', replace: true })
           }
         } catch (error) {
           // remove token and go to login page to re-login
