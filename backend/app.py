@@ -140,6 +140,13 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+def format_completed(stamp):
+    """毫秒时间戳 → 「YYYY-MM-DD HH:MM」，用于进度备注等文案。"""
+    if not stamp:
+        return ""
+    return datetime.fromtimestamp(int(stamp) / 1000).strftime("%Y-%m-%d %H:%M")
+
+
 def parse_ms(value):
     if value is None or value == "":
         return now_ms()
@@ -259,6 +266,7 @@ def account_out(row):
         "cost": None if row["cost"] is None else float(row["cost"]),
         "profit": None if row["profit"] is None else float(row["profit"]),
         "status": row["status"] or "pending",
+        "completed_at": int(row["completed_at"]) if row.get("completed_at") else None,
         "remark": row["remark"] or "",
         "creator": row["creator"] or "",
     }
@@ -415,6 +423,9 @@ def init_db():
             creator text,
             created_at timestamptz NOT NULL DEFAULT now()
         )
+        """,
+        """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS completed_at bigint
         """,
         """
         CREATE TABLE IF NOT EXISTS order_progress (
@@ -1127,6 +1138,13 @@ class App(BaseHTTPRequestHandler):
         status = pick("status", "pending") or "pending"
         if status not in ("pending", "doing", "done"):
             status = "pending"
+        # 完成时间：状态为已完成时记录（首次完成取当前时间，之后保持不变），
+        # 状态改回待定/进行中则清空，等再次完成时重新记录
+        if status == "done":
+            prior = existing.get("completed_at") if existing is not None else None
+            completed_at = int(prior) if prior else now_ms()
+        else:
+            completed_at = None
         return {
             "timestamp": stamp,
             "biz_date": biz_date,
@@ -1139,13 +1157,14 @@ class App(BaseHTTPRequestHandler):
             "cost": cost,
             "profit": profit,
             "status": status,
+            "completed_at": completed_at,
             "remark": pick("remark"),
             "creator": pick("creator") or (user["username"] if user else ""),
         }
 
     def account_create(self, body, user):
         values = self.account_values(body, user)
-        columns = ACCOUNT_FIELDS
+        columns = ACCOUNT_FIELDS + ["completed_at"]
         params = [values[column] for column in columns]
         sql = (
             "INSERT INTO account_records (" + ", ".join(columns) + ") VALUES ("
@@ -1177,6 +1196,9 @@ class App(BaseHTTPRequestHandler):
                         continue
                     assignments.append(column + " = %s")
                     params.append(values[column])
+                if "status" in body:
+                    assignments.append("completed_at = %s")
+                    params.append(values["completed_at"])
                 if not assignments:
                     self.send_json({"code": 20000, "data": account_out(existing)})
                     return
@@ -1189,9 +1211,14 @@ class App(BaseHTTPRequestHandler):
                 new_status = values["status"]
                 if "status" in body and new_status != (existing["status"] or "pending"):
                     label = {"pending": "待定", "doing": "进行中", "done": "已完成"}.get(new_status, new_status)
+                    if new_status == "done":
+                        note = "订单已完成，完成时间 " + format_completed(values["completed_at"])
+                    else:
+                        note = "订单状态更新为「%s」" % label
                     insert_progress(
-                        cur, record_id, "状态变更", "done" if new_status == "done" else "doing",
-                        "订单状态更新为「%s」" % label, user["username"] if user else "",
+                        cur, record_id, "已完成" if new_status == "done" else "状态变更",
+                        "done" if new_status == "done" else "doing",
+                        note, user["username"] if user else "",
                     )
             conn.commit()
         self.send_json({"code": 20000, "data": account_out(row)})

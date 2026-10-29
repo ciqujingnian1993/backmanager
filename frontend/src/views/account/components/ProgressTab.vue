@@ -88,6 +88,9 @@
       <el-table-column label="最近更新" width="160">
         <template slot-scope="{ row }">{{ row.last_timestamp ? formatFull(row.last_timestamp) : '—' }}</template>
       </el-table-column>
+      <el-table-column label="完成时间" width="150" align="center">
+        <template slot-scope="{ row }">{{ row.completed_at ? formatFull(row.completed_at) : '—' }}</template>
+      </el-table-column>
       <el-table-column label="跟进" width="80" align="center">
         <template slot-scope="{ row }">{{ row.progress_count }} 条</template>
       </el-table-column>

@@ -101,32 +101,35 @@
           style="width: 100%"
         >
           <el-table-column prop="biz_date" label="日期" width="100" align="center" />
-          <el-table-column prop="category" label="行业" width="120" align="center" />
-          <el-table-column prop="client" label="客户" min-width="140" />
-          <el-table-column prop="items" label="业务项" min-width="140" />
-          <el-table-column label="单价" width="100" align="center">
+          <el-table-column prop="category" label="行业" width="100" align="center" />
+          <el-table-column prop="client" label="客户" min-width="120" show-overflow-tooltip />
+          <el-table-column prop="items" label="业务项" min-width="120" show-overflow-tooltip />
+          <el-table-column label="单价" width="90" align="center">
             <template slot-scope="{ row }">{{ amount(row.unit_price) }}</template>
           </el-table-column>
-          <el-table-column label="数量" width="80" align="center">
+          <el-table-column label="数量" width="70" align="center">
             <template slot-scope="{ row }">{{ row.quantity }}</template>
           </el-table-column>
-          <el-table-column label="收入" width="110" align="center">
+          <el-table-column label="收入" width="90" align="center">
             <template slot-scope="{ row }">{{ amount(row.revenue) }}</template>
           </el-table-column>
-          <el-table-column label="成本" width="110" align="center">
+          <el-table-column label="成本" width="90" align="center">
             <template slot-scope="{ row }">{{ amount(row.cost) }}</template>
           </el-table-column>
-          <el-table-column label="利润" width="110" align="center">
+          <el-table-column label="利润" width="90" align="center">
             <template slot-scope="{ row }">{{ amount(row.profit) }}</template>
           </el-table-column>
-          <el-table-column label="状态" width="90" align="center">
+          <el-table-column label="状态" width="85" align="center">
             <template slot-scope="{ row }">
               <el-tag :type="statusType(row.status)" size="mini">
                 {{ statusText(row.status) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="remark" label="备注" min-width="140" />
+          <el-table-column label="完成时间" width="132" align="center">
+            <template slot-scope="{ row }">{{ completedText(row.completed_at) }}</template>
+          </el-table-column>
+          <el-table-column prop="remark" label="备注" min-width="110" show-overflow-tooltip />
           <el-table-column label="操作" width="140" align="center">
             <template slot-scope="{ row }">
               <el-button type="primary" size="mini" @click="handleUpdate(row)">编辑</el-button>
@@ -513,6 +516,12 @@ export default {
     },
     statusText(status) {
       return STATUS_MAP[status] || '待定'
+    },
+    completedText(stamp) {
+      if (!stamp) return '—'
+      const date = new Date(Number(stamp))
+      const pad = v => String(v).padStart(2, '0')
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
     },
     statusType(status) {
       return status === 'done' ? 'success' : status === 'doing' ? 'warning' : 'info'
