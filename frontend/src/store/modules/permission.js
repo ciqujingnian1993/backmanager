@@ -123,7 +123,7 @@ export function applyMenuConfig(routes, menus) {
     } else {
       route.hidden = route.children.every(child => child.hidden)
       const sorts = route.children.map(child => child.meta.__sort || 0)
-      route.meta.__sort = 100 + Math.min.apply(null, sorts)
+      route.meta.__sort = Math.min.apply(null, sorts)
     }
   })
 

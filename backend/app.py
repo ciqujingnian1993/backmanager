@@ -506,14 +506,23 @@ def init_db():
 # 系统内置页面 → 默认菜单项。菜单可在「菜单管理」里改名/改图标/排序/隐藏/删除，
 # 但页面本体由前端路由提供，菜单只是这些页面的入口配置。
 MENU_SEED = [
-    ("/account/index", "订单列表", "money", "", 10),
-    ("/progress/index", "订单进度", "tree", "", 20),
-    ("/cost/index", "成本管理", "money", "", 30),
-    ("/platform/index", "平台管理", "shopping", "", 40),
-    ("/system/user", "用户管理", "user", "/system", 10),
-    ("/system/role", "角色管理", "lock", "/system", 20),
-    ("/system/menu", "菜单管理", "list", "/system", 30),
+    ("/account/index", "订单管理", "money", "", 10),
+    ("/account/query", "订单查询", "table", "", 20),
+    ("/progress/index", "订单进度", "tree", "", 30),
+    ("/cost/index", "支出管理", "money", "", 40),
+    ("/cost/query", "成本查询", "table", "", 50),
+    ("/system/user", "用户管理", "user", "/system", 110),
+    ("/system/role", "角色管理", "lock", "/system", 120),
+    ("/system/menu", "菜单管理", "list", "/system", 130),
+    ("/system/platform", "平台管理", "shopping", "/system", 140),
 ]
+
+# 旧菜单路径 → 新菜单路径（升级时把存量行改名，避免 ON CONFLICT 撞旧路径）
+MENU_RENAME = {
+    "/platform/index": ("/system/platform", "平台管理", "shopping", "/system", 40),
+    "/account/index": ("/account/index", "订单管理", "money", "", 10),
+    "/cost/index": ("/cost/index", "支出管理", "money", "", 40),
+}
 
 
 # 平台字典的预置项（属于基础配置，不是业务数据，可在「平台管理」里增删改）
@@ -533,7 +542,22 @@ def seed_platforms(cur):
 
 
 def seed_menus(cur):
+    # 先把旧路径改名（如平台管理并入系统管理），再补插新增菜单
+    for old_path, (path, title, icon, parent, sort) in MENU_RENAME.items():
+        cur.execute(
+            """
+            UPDATE menus
+               SET path = %s, title = %s, icon = %s, parent = %s, sort = %s
+             WHERE path = %s
+            """,
+            (path, title, icon, parent, sort, old_path),
+        )
     for path, title, icon, parent, sort in MENU_SEED:
+        # 归位分组与排序（不覆盖用户可能改过的标题/图标/显示开关）
+        cur.execute(
+            "UPDATE menus SET parent = %s, sort = %s WHERE path = %s",
+            (parent, sort, path),
+        )
         cur.execute(
             """
             INSERT INTO menus (path, title, icon, parent, sort, visible)

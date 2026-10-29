@@ -437,8 +437,8 @@ export default {
         this.$router.push({ path: '/progress/index', query })
         return
       }
-      if (target === 'table') query.tab = 'table'
-      this.$router.push({ path: '/account/index', query })
+      // 查看全部订单走只读的「订单查询」页
+      this.$router.push({ path: '/account/query', query })
     },
     money(value) {
       const num = Number(value || 0)

@@ -1,12 +1,14 @@
 // 系统内置页面清单：菜单管理只能从这些页面里挑入口，页面本体由前端路由提供
 export const PAGE_OPTIONS = [
-  { path: '/account/index', label: '订单列表' },
+  { path: '/account/index', label: '订单管理' },
+  { path: '/account/query', label: '订单查询' },
   { path: '/progress/index', label: '订单进度' },
-  { path: '/cost/index', label: '成本管理' },
-  { path: '/platform/index', label: '平台管理' },
+  { path: '/cost/index', label: '支出管理' },
+  { path: '/cost/query', label: '成本查询' },
   { path: '/system/user', label: '用户管理' },
   { path: '/system/role', label: '角色管理' },
-  { path: '/system/menu', label: '菜单管理' }
+  { path: '/system/menu', label: '菜单管理' },
+  { path: '/system/platform', label: '平台管理' }
 ]
 
 export const PAGE_PATHS = PAGE_OPTIONS.map(item => item.path)

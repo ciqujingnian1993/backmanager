@@ -95,7 +95,13 @@ export const asyncRoutes = [
         path: 'index',
         component: () => import('@/views/account/index'),
         name: 'OrderList',
-        meta: { title: '订单列表', icon: 'money', breadcrumb: false }
+        meta: { title: '订单管理', icon: 'money' }
+      },
+      {
+        path: 'query',
+        component: () => import('@/views/account/query'),
+        name: 'OrderQuery',
+        meta: { title: '订单查询', icon: 'table' }
       }
     ]
   },
@@ -125,22 +131,13 @@ export const asyncRoutes = [
         path: 'index',
         component: () => import('@/views/account/cost'),
         name: 'CostManage',
-        meta: { title: '成本管理', icon: 'money', breadcrumb: false }
-      }
-    ]
-  },
-  {
-    path: '/platform',
-    component: Layout,
-    redirect: '/platform/index',
-    name: 'PlatformManageMenu',
-    meta: { title: '平台管理', icon: 'shopping' },
-    children: [
+        meta: { title: '支出管理', icon: 'money' }
+      },
       {
-        path: 'index',
-        component: () => import('@/views/platform/index'),
-        name: 'PlatformManage',
-        meta: { title: '平台管理', icon: 'shopping', breadcrumb: false, roles: ['admin'] }
+        path: 'query',
+        component: () => import('@/views/account/cost-query'),
+        name: 'CostQuery',
+        meta: { title: '成本查询', icon: 'table' }
       }
     ]
   },
@@ -168,6 +165,12 @@ export const asyncRoutes = [
         component: () => import('@/views/menu/index'),
         name: 'MenuManage',
         meta: { title: '菜单管理', icon: 'list', roles: ['admin'] }
+      },
+      {
+        path: 'platform',
+        component: () => import('@/views/platform/index'),
+        name: 'PlatformManage',
+        meta: { title: '平台管理', icon: 'shopping', roles: ['admin'] }
       }
     ]
   }
