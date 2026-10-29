@@ -160,7 +160,14 @@ export default {
       dialogType: 'create',
       form: this.emptyForm(),
       rules: {
-        username: [{ required: true, message: '请填写登录账号', trigger: 'blur' }],
+        username: [
+          { required: true, message: '请填写登录账号', trigger: 'blur' },
+          {
+            pattern: /^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$/,
+            message: '2-32 位字母、数字、下划线，不能以符号开头',
+            trigger: 'blur'
+          }
+        ],
         password: [{ required: true, message: '请填写初始密码', trigger: 'blur' }, { min: 6, message: '密码至少 6 位', trigger: 'blur' }],
         name: [{ required: true, message: '请填写姓名', trigger: 'blur' }],
         roles: [{ required: true, type: 'array', message: '请至少选择一个角色', trigger: 'change' }]

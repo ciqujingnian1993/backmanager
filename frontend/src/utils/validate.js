@@ -12,12 +12,12 @@ export function isExternal(path) {
 
 /**
  * 账号校验：后台账号由「用户管理」自行创建，这里只做格式约束
- * （字母开头，2-32 位字母/数字/下划线/短横线）
+ * （字母或数字开头，2-32 位字母/数字/下划线/短横线，允许纯数字工号如 001）
  * @param {string} str
  * @returns {Boolean}
  */
 export function validUsername(str) {
-  return /^[A-Za-z][A-Za-z0-9_-]{1,31}$/.test((str || '').trim())
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$/.test((str || '').trim())
 }
 
 /**

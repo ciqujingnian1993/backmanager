@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timezone, timedelta
@@ -18,6 +19,9 @@ ROUTES_PATH = BASE_DIR / "routes.json"
 HOST = os.environ.get("HOST", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "7001"))
 MAX_UPLOAD = 20 * 1024 * 1024
+
+# 账号格式：字母或数字开头，2-32 位字母/数字/下划线/短横线（与登录页校验保持一致）
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$")
 
 ARTICLE_FIELDS = [
     "timestamp", "author", "reviewer", "title", "content_short", "content",
@@ -928,6 +932,13 @@ class App(BaseHTTPRequestHandler):
         password = body.get("password") or ""
         if not username or len(password) < 6:
             self.send_json({"code": 60204, "message": "账号不能为空，密码至少 6 位"})
+            return
+        # 与登录页一致的账号格式：字母或数字开头，2-32 位字母/数字/下划线/短横线
+        if not USERNAME_PATTERN.match(username):
+            self.send_json({
+                "code": 60204,
+                "message": "账号格式不正确：2-32 位字母、数字、下划线，且不能以符号开头",
+            })
             return
         roles = body.get("roles") or []
         if isinstance(roles, str):
