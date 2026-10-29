@@ -2,9 +2,10 @@
   <div class="app-container role-page">
     <div class="page-header">
       <div>
-        <h3 class="page-title">角色权限</h3>
+        <h3 class="page-title">角色管理</h3>
         <p class="page-desc">
-          角色决定用户登录后能看到哪些页面。管理员（admin）固定拥有全部权限，不受此处限制。
+          角色决定用户登录后能看到哪些菜单。可以自己新增角色、勾选它能看到哪些菜单；
+          管理员（admin）固定拥有全部权限，不受此处限制。
         </p>
       </div>
       <el-button type="primary" icon="el-icon-plus" @click="handleCreate">新增角色</el-button>
@@ -23,12 +24,12 @@
           <code class="role-key">{{ row.key }}</code>
         </template>
       </el-table-column>
-      <el-table-column prop="name" label="角色名称" width="160" />
-      <el-table-column prop="description" label="说明" min-width="200" />
-      <el-table-column label="可访问页面" min-width="240">
+      <el-table-column prop="name" label="角色名称" width="150" />
+      <el-table-column prop="description" label="说明" min-width="180" show-overflow-tooltip />
+      <el-table-column label="可访问菜单" min-width="260">
         <template slot-scope="{ row }">
           <template v-if="row.key === 'admin'">
-            <el-tag type="danger" size="mini">全部页面</el-tag>
+            <el-tag type="danger" size="mini">全部菜单</el-tag>
           </template>
           <template v-else>
             <el-tag
@@ -42,6 +43,9 @@
             <span v-if="!routePaths(row.routes).length" class="muted">未配置</span>
           </template>
         </template>
+      </el-table-column>
+      <el-table-column label="用户数" width="90" align="center">
+        <template slot-scope="{ row }">{{ row.user_count || 0 }}</template>
       </el-table-column>
       <el-table-column label="操作" width="180" align="center">
         <template slot-scope="{ row }">
@@ -68,7 +72,7 @@
     <el-dialog
       :title="dialogType === 'edit' ? `编辑角色 · ${form.name}` : '新增角色'"
       :visible.sync="dialogVisible"
-      width="560px"
+      width="580px"
     >
       <el-form ref="roleForm" :model="form" :rules="rules" label-width="90px">
         <el-form-item label="角色标识" prop="key">
@@ -84,7 +88,7 @@
         <el-form-item label="说明">
           <el-input v-model="form.description" type="textarea" :rows="2" />
         </el-form-item>
-        <el-form-item label="可访问页面">
+        <el-form-item label="菜单权限">
           <div class="perm-box">
             <div v-for="group in pageGroups" :key="group.title" class="perm-group">
               <div class="perm-title">{{ group.title }}</div>
@@ -95,10 +99,14 @@
                 @change="value => toggle(page.path, value)"
               >
                 {{ page.label }}
+                <span v-if="!page.visible" class="perm-hidden">（已隐藏）</span>
               </el-checkbox>
             </div>
+            <div v-if="!pageGroups.length" class="perm-tip">还没有菜单，先去「菜单管理」里添加。</div>
           </div>
-          <div class="perm-tip">没勾选的页面，该角色登录后左侧菜单里看不到，直接输网址也打不开。</div>
+          <div class="perm-tip">
+            没勾选的菜单，该角色登录后左侧看不到，直接输网址也打不开。菜单本身在「菜单管理」里维护。
+          </div>
         </el-form-item>
       </el-form>
       <div slot="footer" class="dialog-footer">
@@ -111,29 +119,12 @@
 
 <script>
 import { fetchRoles, createRole, updateRole, deleteRole } from '@/api/permission'
+import { fetchMenuList } from '@/api/menu'
 
-const PAGE_GROUPS = [
-  {
-    title: '订单',
-    pages: [
-      { path: '/account/index', label: '订单列表' },
-      { path: '/progress/index', label: '订单进度' },
-      { path: '/cost/index', label: '成本管理' }
-    ]
-  },
-  {
-    title: '系统管理',
-    pages: [
-      { path: '/system/user', label: '用户管理' },
-      { path: '/system/role', label: '角色权限' }
-    ]
-  }
-]
-
-const PAGE_LABEL = PAGE_GROUPS.reduce((map, group) => {
-  group.pages.forEach(page => { map[page.path] = page.label })
-  return map
-}, {})
+const PARENT_LABEL = {
+  '': '业务菜单',
+  '/system': '系统管理'
+}
 
 export default {
   name: 'RolePermission',
@@ -142,7 +133,7 @@ export default {
       loading: false,
       saving: false,
       list: [],
-      pageGroups: PAGE_GROUPS,
+      menus: [],
       dialogVisible: false,
       dialogType: 'create',
       form: this.emptyForm(),
@@ -156,8 +147,36 @@ export default {
       }
     }
   },
+  computed: {
+    // 菜单表 → 勾选分组（顶级业务菜单 / 系统管理）
+    pageGroups() {
+      const groups = []
+      const buckets = {}
+      this.menus.forEach(menu => {
+        const parent = menu.parent || ''
+        if (!buckets[parent]) buckets[parent] = []
+        buckets[parent].push(menu)
+      })
+      Object.keys(buckets)
+        .sort((a, b) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b)))
+        .forEach(parent => {
+          groups.push({
+            title: PARENT_LABEL[parent] || parent,
+            pages: buckets[parent]
+              .slice()
+              .sort((a, b) => a.sort - b.sort)
+              .map(menu => ({ path: menu.path, label: menu.title, visible: menu.visible }))
+          })
+        })
+      return groups
+    },
+    menuPathSet() {
+      return new Set(this.menus.map(menu => menu.path))
+    }
+  },
   created() {
     this.getList()
+    this.getMenus()
   },
   methods: {
     emptyForm() {
@@ -172,32 +191,34 @@ export default {
         this.loading = false
       }
     },
-    // 把后端存的 routes 展开成页面 path 列表（父级 + 子级）
+    async getMenus() {
+      const { data } = await fetchMenuList()
+      this.menus = data || []
+    },
+    // 把后端存的 routes 展开成菜单 path 列表（父级 + 子级）
     routePaths(routes) {
       const result = []
       const walk = (items, prefix) => {
         (items || []).forEach(item => {
           if (!item || !item.path) return
           const full = this.joinPath(prefix, item.path)
-          if (PAGE_LABEL[full]) result.push(full)
+          if (this.menuPathSet.has(full)) result.push(full)
           if (item.children && item.children.length) {
             walk(item.children, full)
-          } else if (PAGE_LABEL[full]) {
-            // 叶子节点
           }
         })
       }
       walk(routes, '')
       if (!result.length) {
-        // 兼容只存了父级路径的情况
         (routes || []).forEach(item => {
-          if (item && PAGE_LABEL[item.path]) result.push(item.path)
+          if (item && this.menuPathSet.has(item.path)) result.push(item.path)
         })
       }
       return result
     },
     pageLabel(path) {
-      return PAGE_LABEL[path] || path
+      const found = this.menus.find(menu => menu.path === path)
+      return found ? found.title : path
     },
     joinPath(parent, child) {
       if (!parent || parent === '/') return '/' + String(child).replace(/^\/+/, '')
@@ -225,7 +246,7 @@ export default {
     buildRoutes() {
       return Object.keys(this.checked)
         .filter(path => this.checked[path])
-        .map(path => ({ path, meta: { title: PAGE_LABEL[path] || path }}))
+        .map(path => ({ path, meta: { title: this.pageLabel(path) }}))
     },
     handleDelete(row) {
       this.$confirm(`确认删除角色「${row.name}」吗？使用该角色的账号将失去对应菜单权限。`, '提示', {
@@ -245,7 +266,7 @@ export default {
         if (!valid) return false
         const routes = this.buildRoutes()
         if (!routes.length) {
-          this.$message.warning('请至少勾选一个可访问页面')
+          this.$message.warning('请至少勾选一个菜单')
           return false
         }
         const payload = {
@@ -292,7 +313,7 @@ export default {
     margin: 6px 0 0;
     color: #909399;
     font-size: 13px;
-    max-width: 640px;
+    max-width: 680px;
     line-height: 1.6;
   }
 
@@ -326,6 +347,11 @@ export default {
     font-size: 13px;
     color: #909399;
     margin-bottom: 4px;
+  }
+
+  .perm-hidden {
+    color: #c0c4cc;
+    font-size: 12px;
   }
 
   .perm-tip {

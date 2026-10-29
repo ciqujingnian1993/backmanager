@@ -58,7 +58,7 @@ export default {
   data() {
     const validateUsername = (rule, value, callback) => {
       if (!validUsername(value)) {
-        callback(new Error('请输入账号'))
+        callback(new Error('账号格式不正确（字母开头，2-32 位字母/数字/下划线）'))
       } else {
         callback()
       }

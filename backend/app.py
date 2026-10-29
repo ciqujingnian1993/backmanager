@@ -463,6 +463,18 @@ def init_db():
         CREATE INDEX IF NOT EXISTS cost_records_date_idx
         ON cost_records (timestamp DESC)
         """,
+        """
+        CREATE TABLE IF NOT EXISTS menus (
+            id serial PRIMARY KEY,
+            path text UNIQUE NOT NULL,
+            title text NOT NULL,
+            icon text DEFAULT '',
+            parent text DEFAULT '',
+            sort integer NOT NULL DEFAULT 0,
+            visible boolean NOT NULL DEFAULT true,
+            created_at timestamptz NOT NULL DEFAULT now()
+        )
+        """,
     ]
     with connect() as conn:
         with conn.cursor() as cur:
@@ -472,7 +484,32 @@ def init_db():
             if cur.fetchone()[0] == 0:
                 seed(cur)
             sync_account_route(cur)
+            seed_menus(cur)
         conn.commit()
+
+
+# 系统内置页面 → 默认菜单项。菜单可在「菜单管理」里改名/改图标/排序/隐藏/删除，
+# 但页面本体由前端路由提供，菜单只是这些页面的入口配置。
+MENU_SEED = [
+    ("/account/index", "订单列表", "money", "", 10),
+    ("/progress/index", "订单进度", "tree", "", 20),
+    ("/cost/index", "成本管理", "money", "", 30),
+    ("/system/user", "用户管理", "user", "/system", 10),
+    ("/system/role", "角色管理", "lock", "/system", 20),
+    ("/system/menu", "菜单管理", "list", "/system", 30),
+]
+
+
+def seed_menus(cur):
+    for path, title, icon, parent, sort in MENU_SEED:
+        cur.execute(
+            """
+            INSERT INTO menus (path, title, icon, parent, sort, visible)
+            VALUES (%s, %s, %s, %s, %s, TRUE)
+            ON CONFLICT (path) DO NOTHING
+            """,
+            (path, title, icon, parent, sort),
+        )
 
 
 def sync_account_route(cur):
@@ -664,11 +701,19 @@ class App(BaseHTTPRequestHandler):
         elif path == "/vue-element-admin/roles" and method == "GET":
             self.roles()
         elif path == "/vue-element-admin/role" and method == "POST":
-            self.role_create(body)
+            self.role_create(body, user)
         elif path.startswith("/vue-element-admin/role/") and method == "PUT":
-            self.role_update(path.rsplit("/", 1)[-1], body)
+            self.role_update(path.rsplit("/", 1)[-1], body, user)
         elif path.startswith("/vue-element-admin/role/") and method == "DELETE":
-            self.role_delete(path.rsplit("/", 1)[-1])
+            self.role_delete(path.rsplit("/", 1)[-1], user)
+        elif path == "/vue-element-admin/menu/list" and method == "GET":
+            self.menu_list()
+        elif path == "/vue-element-admin/menu/create" and method == "POST":
+            self.menu_create(body, user)
+        elif path == "/vue-element-admin/menu/update" and method == "POST":
+            self.menu_update(body, user)
+        elif path == "/vue-element-admin/menu/delete" and method == "POST":
+            self.menu_delete(body, user)
         elif path == "/vue-element-admin/search/user" and method == "GET":
             self.search_user(query)
         elif path == "/vue-element-admin/transaction/list" and method == "GET":
@@ -1734,11 +1779,113 @@ class App(BaseHTTPRequestHandler):
     def roles(self):
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT key, name, description, routes FROM roles ORDER BY id")
-                items = [dict(row) for row in cur.fetchall()]
+                cur.execute(
+                    """
+                    SELECT r.key, r.name, r.description, r.routes,
+                           (SELECT COUNT(*) FROM users u WHERE r.key = ANY(u.roles)) AS user_count
+                      FROM roles r
+                     ORDER BY r.id
+                    """
+                )
+                items = []
+                for row in cur.fetchall():
+                    item = dict(row)
+                    item["user_count"] = int(item.get("user_count") or 0)
+                    items.append(item)
         self.send_json({"code": 20000, "data": items})
 
-    def role_create(self, body):
+    # ---------------- 菜单管理 ----------------
+
+    def menu_list(self):
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM menus ORDER BY parent ASC, sort ASC, id ASC")
+                rows = cur.fetchall()
+        items = [{
+            "id": row["id"],
+            "path": row["path"],
+            "title": row["title"],
+            "icon": row["icon"] or "",
+            "parent": row["parent"] or "",
+            "sort": int(row["sort"] or 0),
+            "visible": bool(row["visible"]),
+        } for row in rows]
+        self.send_json({"code": 20000, "data": items})
+
+    def menu_create(self, body, user):
+        if not self.is_admin(user):
+            self.deny("仅管理员可新增菜单")
+            return
+        path = (body.get("path") or "").strip()
+        title = (body.get("title") or "").strip()
+        if not path or not title:
+            self.send_json({"code": 50000, "message": "页面和菜单名称不能为空"})
+            return
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM menus WHERE path = %s", (path,))
+                if cur.fetchone():
+                    self.send_json({"code": 50000, "message": "该页面已经在菜单里了"})
+                    return
+                cur.execute(
+                    """
+                    INSERT INTO menus (path, title, icon, parent, sort, visible)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        path, title, body.get("icon") or "", body.get("parent") or "",
+                        int(body.get("sort") or 0), bool(body.get("visible", True)),
+                    ),
+                )
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    def menu_update(self, body, user):
+        if not self.is_admin(user):
+            self.deny("仅管理员可修改菜单")
+            return
+        menu_id = int(body.get("id") or 0)
+        path = (body.get("path") or "").strip()
+        title = (body.get("title") or "").strip()
+        if not menu_id or not path or not title:
+            self.send_json({"code": 50000, "message": "菜单信息不完整"})
+            return
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM menus WHERE path = %s AND id <> %s", (path, menu_id))
+                if cur.fetchone():
+                    self.send_json({"code": 50000, "message": "该页面已经被别的菜单占用"})
+                    return
+                cur.execute(
+                    """
+                    UPDATE menus SET path = %s, title = %s, icon = %s, parent = %s, sort = %s, visible = %s
+                     WHERE id = %s
+                    """,
+                    (
+                        path, title, body.get("icon") or "", body.get("parent") or "",
+                        int(body.get("sort") or 0), bool(body.get("visible", True)), menu_id,
+                    ),
+                )
+                if cur.rowcount == 0:
+                    self.send_json({"code": 50000, "message": "菜单不存在"})
+                    return
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    def menu_delete(self, body, user):
+        if not self.is_admin(user):
+            self.deny("仅管理员可删除菜单")
+            return
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM menus WHERE id = %s", (int(body.get("id") or 0),))
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    def role_create(self, body, user=None):
+        if user is not None and not self.is_admin(user):
+            self.deny("仅管理员可新增角色")
+            return
         key = (body.get("key") or "").strip() or ("role" + secrets.token_hex(3))
         with connect() as conn:
             with conn.cursor() as cur:
@@ -1753,7 +1900,10 @@ class App(BaseHTTPRequestHandler):
             conn.commit()
         self.send_json({"code": 20000, "data": {"key": key}})
 
-    def role_update(self, key, body):
+    def role_update(self, key, body, user=None):
+        if user is not None and not self.is_admin(user):
+            self.deny("仅管理员可修改角色")
+            return
         with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1766,7 +1916,13 @@ class App(BaseHTTPRequestHandler):
             conn.commit()
         self.send_json({"code": 20000, "data": {"status": "success"}})
 
-    def role_delete(self, key):
+    def role_delete(self, key, user=None):
+        if user is not None and not self.is_admin(user):
+            self.deny("仅管理员可删除角色")
+            return
+        if key == "admin":
+            self.send_json({"code": 50000, "message": "内置管理员角色不能删除"})
+            return
         with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM roles WHERE key = %s", (key,))
