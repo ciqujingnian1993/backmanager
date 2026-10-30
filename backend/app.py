@@ -720,7 +720,13 @@ class App(BaseHTTPRequestHandler):
             if path != "/vue-element-admin/user/login":
                 user = self.current_user(query)
                 if user is None and path != "/health":
-                    self.send_json({"code": 50008, "message": "Login failed, unable to get user details."})
+                    # 带了 token 却查不到 = 被同一账号在别处登录顶下线
+                    has_token = bool(self.headers.get("X-Token") or query.get("token"))
+                    message = (
+                        "该账号已在其他设备登录，当前会话已下线，请重新登录"
+                        if has_token else "登录已失效，请重新登录"
+                    )
+                    self.send_json({"code": 50008, "message": message})
                     return
             else:
                 user = None
@@ -839,6 +845,8 @@ class App(BaseHTTPRequestHandler):
                     self.send_json({"code": 60204, "message": "Account and password are incorrect."})
                     return
                 token = secrets.token_urlsafe(32)
+                # 单点登录：同一账号只保留最新一次登录的会话，旧设备的 token 立即作废
+                cur.execute("DELETE FROM sessions WHERE user_id = %s", (row["id"],))
                 cur.execute("INSERT INTO sessions (token, user_id) VALUES (%s, %s)", (token, row["id"]))
             conn.commit()
         self.send_json({"code": 20000, "data": {"token": token}})

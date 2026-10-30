@@ -83,7 +83,15 @@ router.beforeEach(async(to, from, next) => {
       // 未登录直开深链接时同样会被 * 兜底重定向成 /404，这里取 redirect 前的原始地址，
       // 登录成功后能回到用户原本想访问的页面
       const target = to.path === '/404' && to.redirectedFrom ? to.redirectedFrom : to.path
-      next(`/login?redirect=${encodeURIComponent(target)}`)
+      let loginUrl = `/login?redirect=${encodeURIComponent(target)}`
+      try {
+        // 被其他设备顶下线时写入的标记，带到登录页用于提示原因
+        if (sessionStorage.getItem('session_expired') === '1') {
+          sessionStorage.removeItem('session_expired')
+          loginUrl += '&expired=1'
+        }
+      } catch (e) {}
+      next(loginUrl)
       NProgress.done()
     }
   }
