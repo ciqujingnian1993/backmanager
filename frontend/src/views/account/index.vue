@@ -38,6 +38,14 @@
         :clearable="true"
         @change="handleFilter"
       />
+      <el-button
+        class="filter-item"
+        :type="listQuery.month ? 'default' : 'primary'"
+        size="small"
+        @click="showAllMonths"
+      >
+        全部月份
+      </el-button>
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
@@ -105,7 +113,13 @@
             </div>
           </div>
           <div v-if="!list.length && !loading" class="chat-empty">
-            还没有订单，点击「新增订单」开始录入
+            <template v-if="filtering">
+              当前筛选条件下没有订单
+              <el-button type="text" @click="resetFilters">清除筛选条件</el-button>
+            </template>
+            <template v-else>
+              还没有订单，点击「新增订单」开始录入
+            </template>
           </div>
         </div>
       </el-tab-pane>
@@ -114,6 +128,7 @@
         <el-table
           v-loading="loading"
           :data="list"
+          :empty-text="filtering ? '当前筛选条件下没有订单，试试切到「全部月份」' : '还没有订单'"
           border
           fit
           highlight-current-row
@@ -402,6 +417,9 @@ export default {
     },
     monthSuffix() {
       return this.listQuery.month ? `（${this.listQuery.month}）` : '（全部）'
+    },
+    filtering() {
+      return Boolean(this.listQuery.month || this.listQuery.keyword || this.listQuery.status || this.listQuery.platform)
     }
   },
   created() {
@@ -464,6 +482,31 @@ export default {
       this.listQuery.page = 1
       this.getList()
     },
+    showAllMonths() {
+      this.listQuery.month = ''
+      this.listQuery.page = 1
+      this.getList()
+      this.getSummary()
+    },
+    resetFilters() {
+      this.listQuery.month = ''
+      this.listQuery.keyword = ''
+      this.listQuery.status = ''
+      this.listQuery.platform = ''
+      this.listQuery.page = 1
+      this.getList()
+      this.getSummary()
+    },
+    // 把 "09/03" / "2026-09-03" 统一成 "2026-09"，用于判断记录属于哪个月
+    dateMonth(value) {
+      const text = String(value || '').trim()
+      if (!text) return ''
+      const full = text.match(/^(\d{4})-(\d{1,2})/)
+      if (full) return `${full[1]}-${String(full[2]).padStart(2, '0')}`
+      const short = text.match(/^(\d{1,2})\D/)
+      if (short) return `${new Date().getFullYear()}-${String(short[1]).padStart(2, '0')}`
+      return ''
+    },
     handleCreate() {
       this.dialogType = 'create'
       this.form = this.emptyForm()
@@ -523,6 +566,18 @@ export default {
               type: 'success'
             })
             this.dialogVisible = false
+            // 记录月份和当前筛选不一致时，自动切到该记录所在月份，
+            // 避免「明明保存成功，列表里却看不到」
+            const target = this.dateMonth(this.form.biz_date)
+            if (target && this.listQuery.month && target !== this.listQuery.month) {
+              this.listQuery.month = target
+              this.$message({
+                message: `该订单属于 ${target}，已自动切换到该月份`,
+                type: 'info',
+                duration: 4000
+              })
+            }
+            this.listQuery.page = 1
             this.getList()
             this.getSummary()
           })

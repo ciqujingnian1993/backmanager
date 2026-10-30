@@ -9,8 +9,8 @@
       </el-col>
       <el-col :xs="12" :sm="8">
         <div class="stat-card">
-          <div class="stat-label">本月支出 {{ monthLabel }}</div>
-          <div class="stat-value">￥{{ money(summary.month_total) }}</div>
+          <div class="stat-label">{{ month ? '本月支出 ' + monthLabel : '当前筛选支出（全部月份）' }}</div>
+          <div class="stat-value">￥{{ money(month ? summary.month_total : summary.total) }}</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="8">
@@ -38,12 +38,20 @@
         v-model="listQuery.month"
         class="filter-item"
         type="month"
-        placeholder="按月份筛选"
+        placeholder="全部月份"
         format="yyyy-MM"
         value-format="yyyy-MM"
         clearable
         @change="handleFilter"
       />
+      <el-button
+        class="filter-item"
+        :type="listQuery.month ? 'default' : 'primary'"
+        size="small"
+        @click="showAllMonths"
+      >
+        全部月份
+      </el-button>
       <el-select
         v-model="listQuery.category"
         class="filter-item"
@@ -69,6 +77,7 @@
     <el-table
       v-loading="loading"
       :data="list"
+      :empty-text="listQuery.month || listQuery.category || listQuery.keyword ? '当前筛选条件下没有支出记录，试试切到「全部月份」' : '还没有支出记录'"
       border
       fit
       highlight-current-row
@@ -325,6 +334,12 @@ export default {
       this.month = this.listQuery.month || this.defaultMonth
       this.refresh()
     },
+    showAllMonths() {
+      this.listQuery.month = ''
+      this.listQuery.page = 1
+      this.month = ''
+      this.refresh()
+    },
     handleCreate() {
       this.dialogType = 'create'
       this.form = this.emptyForm()
@@ -373,6 +388,18 @@ export default {
           .then(() => {
             this.$message.success(this.dialogType === 'edit' ? '保存成功' : '记录成功')
             this.dialogVisible = false
+            // 同订单页：记录月份和当前筛选不一致时自动切过去，避免记录保存后看不到
+            const target = String(this.form.biz_date || '').slice(0, 7)
+            if (target.length === 7 && this.listQuery.month && target !== this.listQuery.month) {
+              this.listQuery.month = target
+              this.month = target
+              this.$message({
+                message: `该支出属于 ${target}，已自动切换到该月份`,
+                type: 'info',
+                duration: 4000
+              })
+            }
+            this.listQuery.page = 1
             this.refresh()
           })
           .finally(() => {

@@ -1270,7 +1270,9 @@ class App(BaseHTTPRequestHandler):
             profit = revenue - cost
         biz_date = pick("biz_date")
         if not biz_date:
-            biz_date = datetime.fromtimestamp(stamp / 1000).strftime("%m/%d")
+            # 服务器在 UTC，业务日期按北京时间算，避免凌晨录入落到前一天/前一月
+            moment = datetime.fromtimestamp(stamp / 1000, tz=timezone.utc) + timedelta(hours=8)
+            biz_date = moment.strftime("%m/%d")
         status = pick("status", "pending") or "pending"
         if status not in ("pending", "doing", "done"):
             status = "pending"
