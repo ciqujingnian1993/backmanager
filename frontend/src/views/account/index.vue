@@ -49,7 +49,7 @@
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
-        placeholder="搜索客户 / 业务项 / 备注"
+        placeholder="搜索客户 / 业务项 / 执照 / 法人"
         clearable
         @keyup.enter.native="handleFilter"
       />
@@ -104,6 +104,7 @@
                       {{ statusText(item.status) }}
                     </el-tag>
                     <span class="chat-ops">
+                      <el-button type="text" size="mini" @click="handleDetail(item)">详情</el-button>
                       <el-button type="text" size="mini" @click="handleUpdate(item)">编辑</el-button>
                       <el-button type="text" size="mini" class="danger-text" @click="handleDelete(item)">删除</el-button>
                     </span>
@@ -137,6 +138,24 @@
           <el-table-column prop="biz_date" label="日期" width="100" align="center" />
           <el-table-column prop="category" label="行业" width="100" align="center" />
           <el-table-column prop="client" label="客户" min-width="120" show-overflow-tooltip />
+          <el-table-column label="执照名称" min-width="180">
+            <template slot-scope="{ row }">
+              <el-tooltip
+                v-if="hasLicense(row)"
+                placement="top"
+                :open-delay="200"
+              >
+                <div slot="content" style="line-height: 1.9; font-size: 12px;">
+                  <div>执照名称：{{ row.license_name || '—' }}</div>
+                  <div>统一信用编码：{{ row.credit_code || '—' }}</div>
+                  <div>法人姓名：{{ row.legal_person || '—' }}</div>
+                  <div>法人身份证号：{{ maskId(row.legal_id) }}</div>
+                </div>
+                <span class="license-name" @click="handleDetail(row)">{{ row.license_name || '查看执照信息' }}</span>
+              </el-tooltip>
+              <span v-else class="muted-text">—</span>
+            </template>
+          </el-table-column>
           <el-table-column label="平台" width="90" align="center">
             <template slot-scope="{ row }">
               <el-tag v-if="row.platform" size="mini" effect="plain">{{ row.platform }}</el-tag>
@@ -170,8 +189,9 @@
             <template slot-scope="{ row }">{{ completedText(row.completed_at) }}</template>
           </el-table-column>
           <el-table-column prop="remark" label="备注" min-width="110" show-overflow-tooltip />
-          <el-table-column label="操作" width="140" align="center">
+          <el-table-column label="操作" width="200" align="center">
             <template slot-scope="{ row }">
+              <el-button type="text" size="mini" @click="handleDetail(row)">详情</el-button>
               <el-button type="primary" size="mini" @click="handleUpdate(row)">编辑</el-button>
               <el-button type="danger" size="mini" @click="handleDelete(row)">删除</el-button>
             </template>
@@ -191,13 +211,13 @@
     <el-dialog
       :title="dialogType === 'edit' ? '编辑订单' : '新增订单'"
       :visible.sync="dialogVisible"
-      width="720px"
+      width="760px"
     >
       <el-form
         ref="accountForm"
         :model="form"
         :rules="rules"
-        label-width="88px"
+        label-width="104px"
       >
         <el-row :gutter="16">
           <el-col :span="8">
@@ -255,6 +275,44 @@
           <el-col :span="12">
             <el-form-item label="业务项" prop="items">
               <el-input v-model="form.items" placeholder="例如 非+注销" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <div class="form-section-title">执照信息<span class="optional-tip">选填</span></div>
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="执照名称" prop="license_name">
+              <el-input v-model="form.license_name" placeholder="营业执照上的名称" clearable />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="统一信用编码" prop="credit_code">
+              <el-input
+                v-model="form.credit_code"
+                maxlength="18"
+                placeholder="18 位统一社会信用代码"
+                clearable
+                @input="form.credit_code = (form.credit_code || '').toUpperCase()"
+              />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="法人姓名" prop="legal_person">
+              <el-input v-model="form.legal_person" placeholder="法定代表人姓名" clearable />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="法人身份证号" prop="legal_id">
+              <el-input
+                v-model="form.legal_id"
+                maxlength="18"
+                placeholder="18 位身份证号"
+                clearable
+                @input="form.legal_id = (form.legal_id || '').toUpperCase()"
+              />
             </el-form-item>
           </el-col>
         </el-row>
@@ -351,11 +409,14 @@
         <el-button type="primary" :loading="saving" @click="submitForm">确定</el-button>
       </div>
     </el-dialog>
+
+    <order-detail-dialog :visible.sync="detailVisible" :row="detailRow" />
   </div>
 </template>
 
 <script>
 import Pagination from '@/components/Pagination'
+import OrderDetailDialog from './components/OrderDetailDialog'
 import {
   fetchAccountList,
   fetchAccountSummary,
@@ -372,9 +433,24 @@ const STATUS_MAP = {
   done: '已完成'
 }
 
+// 统一社会信用代码：18 位，数字与大写字母（不含 I O Z S V）
+const CREDIT_CODE_RE = /^[0-9A-HJ-NPQRTUWXY]{18}$/
+// 二代身份证：17 位数字 + 校验位（数字或 X）
+const ID_CARD_RE = /^\d{17}[\dX]$/
+
+// 选填字段：填了才校验格式，空着直接放过
+function optionalPattern(pattern, message) {
+  return (rule, value, callback) => {
+    const text = String(value || '').trim()
+    if (!text) return callback()
+    if (!pattern.test(text)) return callback(new Error(message))
+    return callback()
+  }
+}
+
 export default {
   name: 'OrderList',
-  components: { Pagination },
+  components: { Pagination, OrderDetailDialog },
   mixins: [refreshOnActivate],
   data() {
     const now = new Date()
@@ -405,11 +481,19 @@ export default {
       },
       dialogVisible: false,
       dialogType: 'create',
+      detailVisible: false,
+      detailRow: null,
       form: this.emptyForm(),
       rules: {
         biz_date: [{ required: true, message: '请选择业务日期', trigger: 'change' }],
         category: [{ required: true, message: '请填写行业', trigger: 'change' }],
-        client: [{ required: true, message: '请填写客户', trigger: 'blur' }]
+        client: [{ required: true, message: '请填写客户', trigger: 'blur' }],
+        credit_code: [
+          { validator: optionalPattern(CREDIT_CODE_RE, '统一信用编码为 18 位数字或大写字母'), trigger: 'blur' }
+        ],
+        legal_id: [
+          { validator: optionalPattern(ID_CARD_RE, '身份证号为 18 位，最后一位可为 X'), trigger: 'blur' }
+        ]
       }
     }
   },
@@ -442,6 +526,16 @@ export default {
       this.getSummary()
       this.loadPlatforms()
     },
+    hasLicense(row) {
+      return Boolean(row.license_name || row.credit_code || row.legal_person || row.legal_id)
+    },
+    // 身份证号只露出前 6 后 4，避免在列表里被随手看到/截图
+    maskId(value) {
+      const text = String(value || '').trim()
+      if (!text) return '—'
+      if (text.length <= 10) return text
+      return text.slice(0, 6) + '*'.repeat(text.length - 10) + text.slice(-4)
+    },
     async loadPlatforms() {
       try {
         const { data } = await fetchPlatformList()
@@ -467,7 +561,11 @@ export default {
         cost: undefined,
         profit: undefined,
         status: 'pending',
-        remark: ''
+        remark: '',
+        license_name: '',
+        credit_code: '',
+        legal_person: '',
+        legal_id: ''
       }
     },
     async getList() {
@@ -531,6 +629,10 @@ export default {
         this.$refs.accountForm && this.$refs.accountForm.clearValidate()
       })
     },
+    handleDetail(row) {
+      this.detailRow = row
+      this.detailVisible = true
+    },
     handleDelete(row) {
       this.$confirm('确认删除这条订单吗？', '提示', {
         confirmButtonText: '确定',
@@ -561,7 +663,11 @@ export default {
           cost: this.form.cost === undefined ? null : this.form.cost,
           profit: this.form.profit === undefined ? null : this.form.profit,
           status: this.form.status,
-          remark: this.form.remark
+          remark: this.form.remark,
+          license_name: this.form.license_name || '',
+          credit_code: (this.form.credit_code || '').toUpperCase(),
+          legal_person: this.form.legal_person || '',
+          legal_id: (this.form.legal_id || '').toUpperCase()
         }
         const request = this.dialogType === 'edit'
           ? updateAccount(payload)
@@ -600,6 +706,8 @@ export default {
       if (head) lines.push(head)
       const subject = [form.client, form.items].filter(Boolean).join('')
       if (subject) lines.push(subject)
+      if (form.license_name) lines.push('执照：' + form.license_name)
+      if (form.legal_person) lines.push('法人：' + form.legal_person)
 
       const unitPrice = this.numberOrNull(form.unit_price)
       const quantity = form.quantity === undefined || form.quantity === null || form.quantity === ''
@@ -770,6 +878,33 @@ export default {
     display: flex;
     align-items: center;
     justify-content: space-between;
+  }
+
+  .license-name {
+    color: #409eff;
+    cursor: pointer;
+  }
+
+  .license-tip {
+    line-height: 1.9;
+    font-size: 12px;
+  }
+
+  .form-section-title {
+    margin: 4px 0 14px;
+    padding-left: 8px;
+    border-left: 3px solid #409eff;
+    font-size: 13px;
+    font-weight: 600;
+    color: #303133;
+    line-height: 18px;
+
+    .optional-tip {
+      margin-left: 8px;
+      font-weight: 400;
+      font-size: 12px;
+      color: #909399;
+    }
   }
 
   .chat-ops .el-button + .el-button {

@@ -18,7 +18,7 @@
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
-        placeholder="搜索客户 / 业务项 / 备注"
+        placeholder="搜索客户 / 业务项 / 执照 / 法人"
         clearable
         @keyup.enter.native="handleFilter"
       />
@@ -58,6 +58,20 @@
       <el-table-column prop="biz_date" label="日期" width="100" align="center" />
       <el-table-column prop="category" label="行业" width="100" align="center" />
       <el-table-column prop="client" label="客户" min-width="120" show-overflow-tooltip />
+      <el-table-column label="执照名称" min-width="180">
+        <template slot-scope="{ row }">
+          <el-tooltip v-if="hasLicense(row)" placement="top" :open-delay="200">
+            <div slot="content" style="line-height: 1.9; font-size: 12px;">
+              <div>执照名称：{{ row.license_name || '—' }}</div>
+              <div>统一信用编码：{{ row.credit_code || '—' }}</div>
+              <div>法人姓名：{{ row.legal_person || '—' }}</div>
+              <div>法人身份证号：{{ maskId(row.legal_id) }}</div>
+            </div>
+            <span class="license-name" @click="handleDetail(row)">{{ row.license_name || '查看执照信息' }}</span>
+          </el-tooltip>
+          <span v-else class="muted-text">—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="平台" width="90" align="center">
         <template slot-scope="{ row }">
           <el-tag v-if="row.platform" size="mini" effect="plain">{{ row.platform }}</el-tag>
@@ -91,6 +105,11 @@
         <template slot-scope="{ row }">{{ completedText(row.completed_at) }}</template>
       </el-table-column>
       <el-table-column prop="remark" label="备注" min-width="110" show-overflow-tooltip />
+      <el-table-column label="操作" width="90" align="center" fixed="right">
+        <template slot-scope="{ row }">
+          <el-button type="text" size="mini" @click="handleDetail(row)">详情</el-button>
+        </template>
+      </el-table-column>
     </el-table>
     <pagination
       v-show="total > 0"
@@ -99,11 +118,14 @@
       :limit.sync="listQuery.limit"
       @pagination="getList"
     />
+
+    <order-detail-dialog :visible.sync="detailVisible" :row="detailRow" />
   </div>
 </template>
 
 <script>
 import Pagination from '@/components/Pagination'
+import OrderDetailDialog from './components/OrderDetailDialog'
 import { fetchAccountList } from '@/api/account'
 import { fetchPlatformList } from '@/api/platform'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
@@ -116,7 +138,7 @@ const STATUS_MAP = {
 
 export default {
   name: 'OrderQuery',
-  components: { Pagination },
+  components: { Pagination, OrderDetailDialog },
   mixins: [refreshOnActivate],
   data() {
     const now = new Date()
@@ -126,6 +148,8 @@ export default {
       list: [],
       total: 0,
       platformOptions: [],
+      detailVisible: false,
+      detailRow: null,
       listQuery: {
         page: 1,
         limit: 20,
@@ -147,6 +171,20 @@ export default {
     refreshPage() {
       this.getList()
       this.getPlatforms()
+    },
+    hasLicense(row) {
+      return Boolean(row.license_name || row.credit_code || row.legal_person || row.legal_id)
+    },
+    handleDetail(row) {
+      this.detailRow = row
+      this.detailVisible = true
+    },
+    // 身份证号只露出前 6 后 4
+    maskId(value) {
+      const text = String(value || '').trim()
+      if (!text) return '—'
+      if (text.length <= 10) return text
+      return text.slice(0, 6) + '*'.repeat(text.length - 10) + text.slice(-4)
     },
     async getList() {
       this.loading = true
@@ -221,5 +259,10 @@ export default {
 
 .muted-text {
   color: #c0c4cc;
+}
+
+.license-name {
+  color: #409eff;
+  cursor: pointer;
 }
 </style>

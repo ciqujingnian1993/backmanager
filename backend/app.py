@@ -32,6 +32,7 @@ ARTICLE_FIELDS = [
 ACCOUNT_FIELDS = [
     "timestamp", "biz_date", "category", "client", "platform", "items", "unit_price", "quantity",
     "revenue", "cost", "profit", "status", "remark", "creator",
+    "license_name", "credit_code", "legal_person", "legal_id",
 ]
 
 COST_FIELDS = [
@@ -245,6 +246,10 @@ def account_message(record):
     subject = "".join(part for part in [record.get("client"), record.get("items")] if part)
     if subject:
         lines.append(subject)
+    if record.get("license_name"):
+        lines.append("执照：" + record["license_name"])
+    if record.get("legal_person"):
+        lines.append("法人：" + record["legal_person"])
     lines.append("单价：" + format_amount(record.get("unit_price")))
     quantity = record.get("quantity")
     if quantity is not None and float(quantity) != 1:
@@ -275,6 +280,10 @@ def account_out(row):
         "completed_at": int(row["completed_at"]) if row.get("completed_at") else None,
         "remark": row["remark"] or "",
         "creator": row["creator"] or "",
+        "license_name": row.get("license_name") or "",
+        "credit_code": row.get("credit_code") or "",
+        "legal_person": row.get("legal_person") or "",
+        "legal_id": row.get("legal_id") or "",
     }
     record["message"] = account_message(record)
     return record
@@ -436,6 +445,18 @@ def init_db():
         """,
         """
         ALTER TABLE account_records ADD COLUMN IF NOT EXISTS platform text
+        """,
+        """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS license_name text
+        """,
+        """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS credit_code text
+        """,
+        """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS legal_person text
+        """,
+        """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS legal_id text
         """,
         """
         CREATE TABLE IF NOT EXISTS order_progress (
@@ -1181,8 +1202,11 @@ class App(BaseHTTPRequestHandler):
         params = []
         if query.get("keyword"):
             keyword = "%" + query["keyword"] + "%"
-            where.append("(client ILIKE %s OR items ILIKE %s OR category ILIKE %s OR remark ILIKE %s)")
-            params.extend([keyword] * 4)
+            where.append(
+                "(client ILIKE %s OR items ILIKE %s OR category ILIKE %s OR remark ILIKE %s"
+                " OR license_name ILIKE %s OR credit_code ILIKE %s OR legal_person ILIKE %s)"
+            )
+            params.extend([keyword] * 7)
         if query.get("status"):
             where.append("status = %s")
             params.append(query["status"])
@@ -1307,6 +1331,10 @@ class App(BaseHTTPRequestHandler):
             "completed_at": completed_at,
             "remark": pick("remark"),
             "creator": pick("creator") or (user["username"] if user else ""),
+            "license_name": (pick("license_name") or "").strip(),
+            "credit_code": (pick("credit_code") or "").strip().upper(),
+            "legal_person": (pick("legal_person") or "").strip(),
+            "legal_id": (pick("legal_id") or "").strip().upper(),
         }
 
     def account_create(self, body, user):
