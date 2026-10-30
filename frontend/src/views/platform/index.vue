@@ -80,9 +80,11 @@
 
 <script>
 import { fetchPlatformList, createPlatform, updatePlatform, deletePlatform } from '@/api/platform'
+import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 export default {
   name: 'PlatformManage',
+  mixins: [refreshOnActivate],
   data() {
     return {
       loading: false,
@@ -101,6 +103,10 @@ export default {
     this.getList()
   },
   methods: {
+    // 从其它菜单切回本页时（keep-alive 还原）静默刷新
+    refreshPage() {
+      this.getList()
+    },
     emptyForm() {
       return {
         id: undefined,

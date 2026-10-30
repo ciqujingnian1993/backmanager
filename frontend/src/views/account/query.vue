@@ -106,6 +106,7 @@
 import Pagination from '@/components/Pagination'
 import { fetchAccountList } from '@/api/account'
 import { fetchPlatformList } from '@/api/platform'
+import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const STATUS_MAP = {
   pending: '待定',
@@ -116,6 +117,7 @@ const STATUS_MAP = {
 export default {
   name: 'OrderQuery',
   components: { Pagination },
+  mixins: [refreshOnActivate],
   data() {
     const now = new Date()
     const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
@@ -141,6 +143,11 @@ export default {
     this.getPlatforms()
   },
   methods: {
+    // 从其它菜单切回本页时（keep-alive 还原）静默刷新
+    refreshPage() {
+      this.getList()
+      this.getPlatforms()
+    },
     async getList() {
       this.loading = true
       try {

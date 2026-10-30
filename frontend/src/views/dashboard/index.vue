@@ -182,6 +182,7 @@
 <script>
 import BaseChart from './components/BaseChart'
 import { fetchDashboardOverview } from '@/api/dashboard'
+import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const STEPS = ['已录入', '已联系', '已报价', '已付款', '办理中', '已交付', '已完成']
 
@@ -224,6 +225,7 @@ function emptyData() {
 export default {
   name: 'Dashboard',
   components: { BaseChart },
+  mixins: [refreshOnActivate],
   data() {
     return {
       loading: false,
@@ -421,6 +423,10 @@ export default {
     this.getData()
   },
   methods: {
+    // 从其它菜单切回本页时（keep-alive 还原）静默刷新
+    refreshPage() {
+      this.getData()
+    },
     async getData() {
       this.loading = true
       try {

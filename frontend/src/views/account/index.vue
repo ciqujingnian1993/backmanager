@@ -364,6 +364,7 @@ import {
   deleteAccount
 } from '@/api/account'
 import { fetchPlatformList } from '@/api/platform'
+import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const STATUS_MAP = {
   pending: '待定',
@@ -374,6 +375,7 @@ const STATUS_MAP = {
 export default {
   name: 'OrderList',
   components: { Pagination },
+  mixins: [refreshOnActivate],
   data() {
     const now = new Date()
     const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
@@ -434,6 +436,12 @@ export default {
     this.loadPlatforms()
   },
   methods: {
+    // 从其它菜单切回本页时（keep-alive 还原）静默刷新，保证看到最新数据
+    refreshPage() {
+      this.getList()
+      this.getSummary()
+      this.loadPlatforms()
+    },
     async loadPlatforms() {
       try {
         const { data } = await fetchPlatformList()

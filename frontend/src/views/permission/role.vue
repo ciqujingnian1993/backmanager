@@ -120,6 +120,7 @@
 <script>
 import { fetchRoles, createRole, updateRole, deleteRole } from '@/api/permission'
 import { fetchMenuList } from '@/api/menu'
+import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const PARENT_LABEL = {
   '': '业务菜单',
@@ -128,6 +129,7 @@ const PARENT_LABEL = {
 
 export default {
   name: 'RolePermission',
+  mixins: [refreshOnActivate],
   data() {
     return {
       loading: false,
@@ -179,6 +181,11 @@ export default {
     this.getMenus()
   },
   methods: {
+    // 从其它菜单切回本页时（keep-alive 还原）静默刷新
+    refreshPage() {
+      this.getList()
+      this.getMenus()
+    },
     emptyForm() {
       return { key: '', name: '', description: '' }
     },

@@ -195,6 +195,7 @@ import {
   createProgress,
   deleteProgress
 } from '@/api/progress'
+import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const STATUS_MAP = {
   pending: '待办',
@@ -206,6 +207,7 @@ const STATUS_MAP = {
 export default {
   name: 'ProgressTab',
   components: { Pagination },
+  mixins: [refreshOnActivate],
   data() {
     return {
       loading: false,
@@ -237,6 +239,10 @@ export default {
     this.refresh()
   },
   methods: {
+    // 从其它菜单切回本页时（keep-alive 还原）静默刷新
+    refreshPage() {
+      this.refresh()
+    },
     refresh() {
       this.getList()
       this.getSummary()

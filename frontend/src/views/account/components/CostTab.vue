@@ -224,12 +224,14 @@
 import Pagination from '@/components/Pagination'
 import { fetchCostList, fetchCostSummary, createCost, updateCost, deleteCost } from '@/api/cost'
 import { fetchAccountList } from '@/api/account'
+import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const METHOD_OPTIONS = ['微信', '支付宝', '银行转账', '现金', '其他']
 
 export default {
   name: 'CostTab',
   components: { Pagination },
+  mixins: [refreshOnActivate],
   props: {
     // 只读模式：隐藏新增/编辑/删除入口，仅作查询展示
     readonly: {
@@ -279,6 +281,12 @@ export default {
     this.loadOrders()
   },
   methods: {
+    // 从其它菜单切回本页时（keep-alive 还原）静默刷新
+    refreshPage() {
+      this.getSummary()
+      this.getList()
+      this.loadOrders()
+    },
     emptyForm() {
       const now = new Date()
       const pad = v => String(v).padStart(2, '0')
