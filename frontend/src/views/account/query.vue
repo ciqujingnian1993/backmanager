@@ -18,20 +18,38 @@
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
-        placeholder="搜索客户 / 业务项 / 执照 / 法人"
+        placeholder="搜索客户 / 手机号 / 执照 / 法人"
         clearable
         @keyup.enter.native="handleFilter"
       />
       <el-select
         v-model="listQuery.status"
         class="filter-item"
-        placeholder="状态"
+        placeholder="订单状态"
         clearable
         @change="handleFilter"
       >
         <el-option label="待定" value="pending" />
         <el-option label="进行中" value="doing" />
         <el-option label="已完成" value="done" />
+      </el-select>
+      <el-select
+        v-model="listQuery.biz_status"
+        class="filter-item"
+        placeholder="工商状态"
+        clearable
+        @change="handleFilter"
+      >
+        <el-option v-for="item in bizStatusOptions" :key="item" :label="item" :value="item" />
+      </el-select>
+      <el-select
+        v-model="listQuery.tax_status"
+        class="filter-item"
+        placeholder="税务状态"
+        clearable
+        @change="handleFilter"
+      >
+        <el-option v-for="item in taxStatusOptions" :key="item" :label="item" :value="item" />
       </el-select>
       <el-select
         v-model="listQuery.platform"
@@ -55,57 +73,48 @@
       highlight-current-row
       style="width: 100%"
     >
-      <el-table-column prop="biz_date" label="日期" width="100" align="center" />
-      <el-table-column prop="category" label="行业" width="100" align="center" />
-      <el-table-column prop="client" label="客户" min-width="120" show-overflow-tooltip />
-      <el-table-column label="执照名称" min-width="180">
+      <el-table-column type="expand">
         <template slot-scope="{ row }">
-          <el-tooltip v-if="hasLicense(row)" placement="top" :open-delay="200">
-            <div slot="content" style="line-height: 1.9; font-size: 12px;">
-              <div>执照名称：{{ row.license_name || '—' }}</div>
-              <div>统一信用编码：{{ row.credit_code || '—' }}</div>
-              <div>法人姓名：{{ row.legal_person || '—' }}</div>
-              <div>法人身份证号：{{ maskId(row.legal_id) }}</div>
-            </div>
-            <span class="license-name" @click="handleDetail(row)">{{ row.license_name || '查看执照信息' }}</span>
-          </el-tooltip>
+          <order-items-table :details="row.details" />
+        </template>
+      </el-table-column>
+      <el-table-column prop="biz_date" label="日期" width="88" align="center" />
+      <el-table-column prop="category" label="行业" width="92" align="center" />
+      <el-table-column prop="client" label="客户" min-width="100" show-overflow-tooltip />
+      <el-table-column label="手机号" width="116">
+        <template slot-scope="{ row }">
+          <span v-if="row.phone">{{ row.phone }}</span>
           <span v-else class="muted-text">—</span>
         </template>
       </el-table-column>
-      <el-table-column label="平台" width="90" align="center">
+      <el-table-column label="平台" width="78" align="center">
         <template slot-scope="{ row }">
           <el-tag v-if="row.platform" size="mini" effect="plain">{{ row.platform }}</el-tag>
           <span v-else class="muted-text">—</span>
         </template>
       </el-table-column>
-      <el-table-column prop="items" label="业务项" min-width="120" show-overflow-tooltip />
-      <el-table-column label="单价" width="90" align="center">
-        <template slot-scope="{ row }">{{ amount(row.unit_price) }}</template>
+      <el-table-column label="执照" width="100" align="center">
+        <template slot-scope="{ row }">
+          <el-button type="text" size="mini" @click="handleDetail(row)">
+            {{ row.license_count }} 个（完成 {{ row.done_count }}）
+          </el-button>
+        </template>
       </el-table-column>
-      <el-table-column label="数量" width="70" align="center">
-        <template slot-scope="{ row }">{{ row.quantity }}</template>
-      </el-table-column>
-      <el-table-column label="收入" width="90" align="center">
+      <el-table-column prop="items" label="业务项" min-width="108" show-overflow-tooltip />
+      <el-table-column label="收入" width="82" align="center">
         <template slot-scope="{ row }">{{ amount(row.revenue) }}</template>
       </el-table-column>
-      <el-table-column label="成本" width="90" align="center">
-        <template slot-scope="{ row }">{{ amount(row.cost) }}</template>
-      </el-table-column>
-      <el-table-column label="利润" width="90" align="center">
-        <template slot-scope="{ row }">{{ amount(row.profit) }}</template>
-      </el-table-column>
-      <el-table-column label="状态" width="85" align="center">
+      <el-table-column label="状态" width="80" align="center">
         <template slot-scope="{ row }">
           <el-tag :type="statusType(row.status)" size="mini">
             {{ statusText(row.status) }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="完成时间" width="132" align="center">
+      <el-table-column label="完成时间" width="138" align="center">
         <template slot-scope="{ row }">{{ completedText(row.completed_at) }}</template>
       </el-table-column>
-      <el-table-column prop="remark" label="备注" min-width="110" show-overflow-tooltip />
-      <el-table-column label="操作" width="90" align="center" fixed="right">
+      <el-table-column label="操作" width="70" align="center" fixed="right">
         <template slot-scope="{ row }">
           <el-button type="text" size="mini" @click="handleDetail(row)">详情</el-button>
         </template>
@@ -126,8 +135,10 @@
 <script>
 import Pagination from '@/components/Pagination'
 import OrderDetailDialog from './components/OrderDetailDialog'
+import OrderItemsTable from './components/OrderItemsTable'
 import { fetchAccountList } from '@/api/account'
 import { fetchPlatformList } from '@/api/platform'
+import { BIZ_STATUS_OPTIONS, TAX_STATUS_OPTIONS } from '@/constants/license'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const STATUS_MAP = {
@@ -138,7 +149,7 @@ const STATUS_MAP = {
 
 export default {
   name: 'OrderQuery',
-  components: { Pagination, OrderDetailDialog },
+  components: { Pagination, OrderDetailDialog, OrderItemsTable },
   mixins: [refreshOnActivate],
   data() {
     const now = new Date()
@@ -148,6 +159,8 @@ export default {
       list: [],
       total: 0,
       platformOptions: [],
+      bizStatusOptions: BIZ_STATUS_OPTIONS,
+      taxStatusOptions: TAX_STATUS_OPTIONS,
       detailVisible: false,
       detailRow: null,
       listQuery: {
@@ -156,7 +169,9 @@ export default {
         month,
         keyword: '',
         status: '',
-        platform: ''
+        platform: '',
+        biz_status: '',
+        tax_status: ''
       }
     }
   },
@@ -172,19 +187,9 @@ export default {
       this.getList()
       this.getPlatforms()
     },
-    hasLicense(row) {
-      return Boolean(row.license_name || row.credit_code || row.legal_person || row.legal_id)
-    },
     handleDetail(row) {
       this.detailRow = row
       this.detailVisible = true
-    },
-    // 身份证号只露出前 6 后 4
-    maskId(value) {
-      const text = String(value || '').trim()
-      if (!text) return '—'
-      if (text.length <= 10) return text
-      return text.slice(0, 6) + '*'.repeat(text.length - 10) + text.slice(-4)
     },
     async getList() {
       this.loading = true
@@ -259,10 +264,5 @@ export default {
 
 .muted-text {
   color: #c0c4cc;
-}
-
-.license-name {
-  color: #409eff;
-  cursor: pointer;
 }
 </style>

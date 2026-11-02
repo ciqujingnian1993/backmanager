@@ -3,14 +3,14 @@
     <el-row :gutter="16" class="stat-row">
       <el-col :xs="12" :sm="6">
         <div class="stat-card">
-          <div class="stat-label">订单总数</div>
-          <div class="stat-value">{{ summary.orders }}</div>
+          <div class="stat-label">任务总数（按执照拆分）</div>
+          <div class="stat-value">{{ summary.tasks }}</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="6">
         <div class="stat-card">
-          <div class="stat-label">有待跟进记录</div>
-          <div class="stat-value ok">{{ summary.covered }}</div>
+          <div class="stat-label">已完成任务</div>
+          <div class="stat-value ok">{{ summary.done }}</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="6">
@@ -41,14 +41,14 @@
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
-        placeholder="搜索客户 / 业务项 / 备注"
+        placeholder="搜索客户 / 手机号 / 执照 / 法人"
         clearable
         @keyup.enter.native="handleFilter"
       />
       <el-select
         v-model="listQuery.status"
         class="filter-item"
-        placeholder="订单状态"
+        placeholder="任务状态"
         clearable
         @change="handleFilter"
       >
@@ -56,8 +56,26 @@
         <el-option label="进行中" value="doing" />
         <el-option label="已完成" value="done" />
       </el-select>
+      <el-select
+        v-model="listQuery.biz_status"
+        class="filter-item"
+        placeholder="工商状态"
+        clearable
+        @change="handleFilter"
+      >
+        <el-option v-for="item in bizStatusOptions" :key="item" :label="item" :value="item" />
+      </el-select>
+      <el-select
+        v-model="listQuery.tax_status"
+        class="filter-item"
+        placeholder="税务状态"
+        clearable
+        @change="handleFilter"
+      >
+        <el-option v-for="item in taxStatusOptions" :key="item" :label="item" :value="item" />
+      </el-select>
       <el-button class="filter-item" icon="el-icon-refresh" @click="refresh">刷新</el-button>
-      <span class="filter-tip">订单录入时会自动生成一条「已录入」进度</span>
+      <span class="filter-tip">一个订单按执照拆成多条任务，每条任务单独跟进</span>
     </div>
 
     <el-table
@@ -68,16 +86,35 @@
       highlight-current-row
       style="width: 100%"
     >
-      <el-table-column label="单号" width="80" align="center">
-        <template slot-scope="{ row }">#{{ row.id }}</template>
+      <el-table-column label="订单" width="62" align="center">
+        <template slot-scope="{ row }">#{{ row.account_id }}</template>
       </el-table-column>
-      <el-table-column prop="biz_date" label="日期" width="110" align="center" />
-      <el-table-column prop="client" label="客户" min-width="130" />
-      <el-table-column prop="items" label="业务项" min-width="130" />
-      <el-table-column label="金额" width="110" align="right">
+      <el-table-column label="客户 / 执照" min-width="240" show-overflow-tooltip>
+        <template slot-scope="{ row }">
+          <div class="cell-main">{{ row.license_name || '未填执照' }}</div>
+          <div class="cell-sub">{{ row.client || '—' }}<span v-if="row.items"> · {{ row.items }}</span></div>
+        </template>
+      </el-table-column>
+      <el-table-column label="工商状态" width="88" align="center">
+        <template slot-scope="{ row }">
+          <el-tag v-if="row.biz_status" size="mini" :type="bizStatusType(row.biz_status)" effect="plain">
+            {{ row.biz_status }}
+          </el-tag>
+          <span v-else class="muted-text">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="税务状态" width="92" align="center">
+        <template slot-scope="{ row }">
+          <el-tag v-if="row.tax_status" size="mini" :type="taxStatusType(row.tax_status)" effect="plain">
+            {{ row.tax_status }}
+          </el-tag>
+          <span v-else class="muted-text">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="金额" width="80" align="right">
         <template slot-scope="{ row }">{{ amount(row.revenue) }}</template>
       </el-table-column>
-      <el-table-column label="当前进度" width="120" align="center">
+      <el-table-column label="当前进度" width="95" align="center">
         <template slot-scope="{ row }">
           <el-tag v-if="row.last_step" :type="tagType(row.last_status)" size="mini">
             {{ row.last_step }}
@@ -85,16 +122,10 @@
           <el-tag v-else type="info" size="mini">未跟进</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="最近更新" width="160">
+      <el-table-column label="最近更新" width="132">
         <template slot-scope="{ row }">{{ row.last_timestamp ? formatFull(row.last_timestamp) : '—' }}</template>
       </el-table-column>
-      <el-table-column label="完成时间" width="150" align="center">
-        <template slot-scope="{ row }">{{ row.completed_at ? formatFull(row.completed_at) : '—' }}</template>
-      </el-table-column>
-      <el-table-column label="跟进" width="80" align="center">
-        <template slot-scope="{ row }">{{ row.progress_count }} 条</template>
-      </el-table-column>
-      <el-table-column label="操作" width="120" align="center">
+      <el-table-column label="操作" width="102" align="center" fixed="right">
         <template slot-scope="{ row }">
           <el-button type="primary" size="mini" @click="openTimeline(row)">跟进记录</el-button>
         </template>
@@ -110,14 +141,23 @@
     />
 
     <el-dialog
-      :title="current ? `订单进度 · ${current.client || '未命名客户'} #${current.id}` : '订单进度'"
+      :title="dialogTitle"
       :visible.sync="dialogVisible"
       width="700px"
       top="6vh"
     >
+      <div v-if="current" class="task-summary">
+        <div class="task-cell"><span class="task-label">客户</span>{{ current.client || '—' }}</div>
+        <div class="task-cell"><span class="task-label">手机号</span>{{ current.phone || '—' }}</div>
+        <div class="task-cell"><span class="task-label">业务项</span>{{ current.items || '—' }}</div>
+        <div class="task-cell"><span class="task-label">工商状态</span>{{ current.biz_status || '—' }}</div>
+        <div class="task-cell"><span class="task-label">税务状态</span>{{ current.tax_status || '—' }}</div>
+        <div class="task-cell"><span class="task-label">任务金额</span>{{ amount(current.revenue) }}</div>
+      </div>
+
       <div v-loading="timelineLoading" class="timeline-wrap">
         <div v-if="!timeline.length && !timelineLoading" class="timeline-empty">
-          这个订单还没有进度记录，可以在下方补一条
+          这条任务还没有进度记录，可以在下方补一条
         </div>
         <el-timeline v-else>
           <el-timeline-item
@@ -195,6 +235,7 @@ import {
   createProgress,
   deleteProgress
 } from '@/api/progress'
+import { BIZ_STATUS_OPTIONS, TAX_STATUS_OPTIONS, bizStatusType, taxStatusType } from '@/constants/license'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const STATUS_MAP = {
@@ -216,12 +257,16 @@ export default {
       total: 0,
       list: [],
       steps: [],
-      summary: { orders: 0, covered: 0, missing: 0, by_step: [] },
+      bizStatusOptions: BIZ_STATUS_OPTIONS,
+      taxStatusOptions: TAX_STATUS_OPTIONS,
+      summary: { tasks: 0, done: 0, covered: 0, missing: 0, by_step: [] },
       listQuery: {
         page: 1,
         limit: 20,
         keyword: '',
-        status: ''
+        status: '',
+        biz_status: '',
+        tax_status: ''
       },
       dialogVisible: false,
       current: null,
@@ -233,12 +278,21 @@ export default {
       }
     }
   },
+  computed: {
+    dialogTitle() {
+      if (!this.current) return '任务进度'
+      const license = this.current.license_name || `订单 #${this.current.account_id}`
+      return `任务进度 · ${this.current.client || '未命名客户'} · ${license}`
+    }
+  },
   created() {
     const keyword = this.$route.query.keyword
     if (keyword) this.listQuery.keyword = keyword
     this.refresh()
   },
   methods: {
+    bizStatusType,
+    taxStatusType,
     // 从其它菜单切回本页时（keep-alive 还原）静默刷新
     refreshPage() {
       this.refresh()
@@ -272,12 +326,15 @@ export default {
       this.dialogVisible = true
       this.loadTimeline(row.id)
     },
-    async loadTimeline(accountId) {
+    async loadTimeline(itemId) {
       this.timelineLoading = true
       try {
-        const { data } = await fetchProgressList(accountId)
+        const { data } = await fetchProgressList(itemId)
         this.timeline = data.items || []
         if (data.steps && data.steps.length) this.steps = data.steps
+        if (data.item && this.current) {
+          this.current = Object.assign({}, this.current, data.item)
+        }
       } finally {
         this.timelineLoading = false
       }
@@ -289,7 +346,7 @@ export default {
       }
       this.saving = true
       createProgress({
-        account_id: this.current.id,
+        item_id: this.current.id,
         step: this.form.step,
         status: this.form.status,
         note: this.form.note
@@ -390,14 +447,56 @@ export default {
     width: 240px;
   }
 
+  .filter-container .filter-item {
+    margin-right: 8px;
+    margin-bottom: 8px;
+  }
+
   .filter-tip {
     color: #909399;
     font-size: 12px;
     margin-left: 8px;
   }
 
+  .muted-text {
+    color: #c0c4cc;
+  }
+
+  .cell-main {
+    font-size: 13px;
+    color: #303133;
+    line-height: 20px;
+  }
+
+  .cell-sub {
+    font-size: 12px;
+    color: #909399;
+    line-height: 18px;
+  }
+
+  .task-summary {
+    display: flex;
+    flex-wrap: wrap;
+    background: #f7f8fa;
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: #303133;
+  }
+
+  .task-cell {
+    width: 33.33%;
+    padding: 3px 0;
+  }
+
+  .task-label {
+    color: #909399;
+    margin-right: 8px;
+  }
+
   .timeline-wrap {
-    max-height: 46vh;
+    max-height: 40vh;
     overflow-y: auto;
     padding: 4px 4px 0;
   }

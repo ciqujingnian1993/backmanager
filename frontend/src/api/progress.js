@@ -1,6 +1,6 @@
 import request from '@/utils/request'
 
-// 订单进度总览：每个订单 + 最新一条进度
+// 任务总览：每条执照明细（任务）+ 最新一条进度
 export function fetchProgressOverview(params) {
   return request({
     url: '/vue-element-admin/account/progress/overview',
@@ -9,12 +9,12 @@ export function fetchProgressOverview(params) {
   })
 }
 
-// 单个订单的完整跟进记录
-export function fetchProgressList(accountId) {
+// 单条任务（执照明细）的完整跟进记录
+export function fetchProgressList(itemId) {
   return request({
     url: '/vue-element-admin/account/progress/list',
     method: 'get',
-    params: { account_id: accountId }
+    params: { item_id: itemId }
   })
 }
 

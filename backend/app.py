@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import time
+import traceback
 from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,7 +31,7 @@ ARTICLE_FIELDS = [
 ]
 
 ACCOUNT_FIELDS = [
-    "timestamp", "biz_date", "category", "client", "platform", "items", "unit_price", "quantity",
+    "timestamp", "biz_date", "category", "client", "phone", "platform", "items", "unit_price", "quantity",
     "revenue", "cost", "profit", "status", "remark", "creator",
     "license_name", "credit_code", "legal_person", "legal_id",
 ]
@@ -42,6 +43,10 @@ COST_FIELDS = [
 
 # 订单进度可选的阶段，前端下拉与此保持一致
 PROGRESS_STEPS = ["已录入", "已联系", "已报价", "已付款", "办理中", "已交付", "已完成"]
+
+# 营业执照状态（工商口径）与税务状态，前端下拉与此保持一致
+BIZ_STATUSES = ["正常", "年报异常", "地址异常", "另册管理", "吊销"]
+TAX_STATUSES = ["有税务", "无税务", "税务非正常"]
 
 COST_CATEGORIES = ["采购", "物流", "人工", "房租", "水电", "推广", "差旅", "办公", "其他"]
 
@@ -239,22 +244,46 @@ def format_amount(value):
 
 
 def account_message(record):
+    """订单消息文案：一单可挂多个执照，每个执照一行。"""
+    details = record.get("details") or []
     lines = ["【订单】"]
     head = " ".join(part for part in [record.get("biz_date"), record.get("category")] if part)
     if head:
         lines.append(head)
-    subject = "".join(part for part in [record.get("client"), record.get("items")] if part)
+    details_count = len(details)
+    subject = record.get("client") or ""
+    if details_count <= 1 and record.get("items"):
+        subject += record["items"]
     if subject:
         lines.append(subject)
-    if record.get("license_name"):
-        lines.append("执照：" + record["license_name"])
-    if record.get("legal_person"):
-        lines.append("法人：" + record["legal_person"])
-    lines.append("单价：" + format_amount(record.get("unit_price")))
-    quantity = record.get("quantity")
-    if quantity is not None and float(quantity) != 1:
-        lines.append("数量：" + format_amount(quantity))
-        lines.append("金额：" + format_amount(record.get("revenue")))
+    if details_count > 1:
+        lines.append("共 %d 个执照任务" % details_count)
+    if record.get("phone"):
+        lines.append("手机：" + record["phone"])
+    for index, detail in enumerate(details, 1):
+        name = detail.get("license_name") or ""
+        extras = []
+        if detail.get("biz_status"):
+            extras.append("工商：" + detail["biz_status"])
+        if detail.get("tax_status"):
+            extras.append("税务：" + detail["tax_status"])
+        if detail.get("items"):
+            extras.append("业务：" + detail["items"])
+        if not name and not extras:
+            continue
+        prefix = ("执照%d：" % index) if len(details) > 1 else "执照："
+        line = prefix + (name or "未填名称")
+        if extras:
+            line += "（" + " / ".join(extras) + "）"
+        lines.append(line)
+    if len(details) == 1:
+        single = details[0]
+        lines.append("单价：" + format_amount(single.get("unit_price")))
+        quantity = single.get("quantity")
+        if quantity is not None and float(quantity) != 1:
+            lines.append("数量：" + format_amount(quantity))
+            lines.append("金额：" + format_amount(single.get("revenue")))
+    lines.append("收入：" + format_amount(record.get("revenue")))
     lines.append("成本：" + format_amount(record.get("cost")))
     lines.append("利润：" + format_amount(record.get("profit")))
     if record.get("remark"):
@@ -262,13 +291,53 @@ def account_message(record):
     return "\n".join(lines)
 
 
-def account_out(row):
+def item_out(row):
+    return {
+        "id": row["id"],
+        "account_id": row["account_id"],
+        "license_name": row.get("license_name") or "",
+        "credit_code": row.get("credit_code") or "",
+        "legal_person": row.get("legal_person") or "",
+        "legal_id": row.get("legal_id") or "",
+        "biz_status": row.get("biz_status") or "",
+        "tax_status": row.get("tax_status") or "",
+        "items": row.get("items") or "",
+        "unit_price": None if row.get("unit_price") is None else float(row["unit_price"]),
+        "quantity": None if row.get("quantity") is None else float(row["quantity"]),
+        "revenue": None if row.get("revenue") is None else float(row["revenue"]),
+        "cost": None if row.get("cost") is None else float(row["cost"]),
+        "profit": None if row.get("profit") is None else float(row["profit"]),
+        "status": row.get("status") or "pending",
+        "completed_at": int(row["completed_at"]) if row.get("completed_at") else None,
+        "remark": row.get("remark") or "",
+        "sort": int(row.get("sort") or 0),
+    }
+
+
+def fetch_details(cur, account_ids):
+    """批量取订单明细，避免列表 N+1 查询。"""
+    ids = [int(i) for i in account_ids if i]
+    if not ids:
+        return {}
+    cur.execute(
+        "SELECT * FROM account_items WHERE account_id = ANY(%s) ORDER BY account_id, sort, id",
+        (ids,),
+    )
+    grouped = {}
+    for row in cur.fetchall():
+        grouped.setdefault(row["account_id"], []).append(item_out(row))
+    return grouped
+
+
+def account_out(row, details=None):
+    details = details or []
     record = {
         "id": row["id"],
         "timestamp": int(row["timestamp"] or 0),
         "biz_date": row["biz_date"] or "",
         "category": row["category"] or "",
         "client": row["client"] or "",
+        "phone": row.get("phone") or "",
         "items": row["items"] or "",
         "unit_price": None if row["unit_price"] is None else float(row["unit_price"]),
         "quantity": None if row["quantity"] is None else float(row["quantity"]),
@@ -280,11 +349,16 @@ def account_out(row):
         "completed_at": int(row["completed_at"]) if row.get("completed_at") else None,
         "remark": row["remark"] or "",
         "creator": row["creator"] or "",
-        "license_name": row.get("license_name") or "",
-        "credit_code": row.get("credit_code") or "",
-        "legal_person": row.get("legal_person") or "",
-        "legal_id": row.get("legal_id") or "",
+        "details": details,
+        "license_count": len(details),
+        "done_count": len([item for item in details if item["status"] == "done"]),
     }
+    # 兼容旧的单执照字段：取第一个明细，老页面/旧脚本仍能读到
+    first = details[0] if details else {}
+    record["license_name"] = first.get("license_name") or row.get("license_name") or ""
+    record["credit_code"] = first.get("credit_code") or row.get("credit_code") or ""
+    record["legal_person"] = first.get("legal_person") or row.get("legal_person") or ""
+    record["legal_id"] = first.get("legal_id") or row.get("legal_id") or ""
     record["message"] = account_message(record)
     return record
 
@@ -305,6 +379,7 @@ def progress_out(row):
     return {
         "id": row["id"],
         "account_id": row["account_id"],
+        "item_id": row.get("item_id"),
         "step": row["step"] or "",
         "status": row["status"] or "doing",
         "note": row["note"] or "",
@@ -328,25 +403,110 @@ def cost_out(row):
     }
 
 
-def insert_progress(cur, account_id, step, status, note, operator, stamp=None):
-    """写入一条订单进度记录。订单创建/状态变更时自动调用。"""
+def insert_progress(cur, account_id, step, status, note, operator, stamp=None, item_id=None):
+    """写入一条进度记录。item_id 指向执照明细（任务），为空表示订单级进度。"""
     if status not in PROGRESS_STATUS:
         status = "doing"
     cur.execute(
         """
-        INSERT INTO order_progress (account_id, step, status, note, operator, timestamp)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO order_progress (account_id, item_id, step, status, note, operator, timestamp)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         """,
-        (account_id, step, status, note or "", operator or "", stamp or now_ms()),
+        (account_id, item_id, step, status, note or "", operator or "", stamp or now_ms()),
     )
 
 
-def auto_progress(cur, record, operator):
-    """根据订单内容生成一条「已录入」初始进度。"""
+def auto_progress(cur, record, operator, item_id=None, detail=None):
+    """订单/任务录入时生成一条「已录入」初始进度。"""
     subject = "".join(part for part in [record.get("client"), record.get("items")] if part)
     amount = format_amount(record.get("revenue"))
     note = "订单已录入：" + (subject or "未命名订单") + "，金额 " + amount
-    insert_progress(cur, record["id"], "已录入", "done", note, operator, record.get("timestamp"))
+    if detail:
+        license_name = detail.get("license_name") or "未填名称"
+        detail_items = detail.get("items") or ""
+        note = "任务已录入：%s%s" % (
+            license_name,
+            (" · " + detail_items) if detail_items else "",
+        )
+    insert_progress(cur, record["id"], "已录入", "done", note, operator, record.get("timestamp"), item_id)
+
+
+def recalc_order(cur, account_id):
+    """按执照明细回算订单级金额与状态：全完成=已完成，有推进=进行中。"""
+    cur.execute(
+        """
+        SELECT COUNT(*) AS cnt,
+               SUM(revenue) AS revenue,
+               SUM(cost) AS cost,
+               SUM(profit) AS profit,
+               COUNT(*) FILTER (WHERE status = 'done') AS done,
+               COUNT(*) FILTER (WHERE status IN ('doing', 'done')) AS active,
+               MAX(completed_at) FILTER (WHERE status = 'done') AS completed_at,
+               string_agg(DISTINCT NULLIF(items, ''), '、') AS items
+          FROM account_items
+         WHERE account_id = %s
+        """,
+        (account_id,),
+    )
+    row = cur.fetchone()
+    count = int(row["cnt"] or 0)
+    done = int(row["done"] or 0)
+    active = int(row["active"] or 0)
+    if count and done == count:
+        status = "done"
+        completed_at = row["completed_at"]
+    elif active:
+        status = "doing"
+        completed_at = None
+    else:
+        status = "pending"
+        completed_at = None
+    cur.execute(
+        """
+        UPDATE account_records
+           SET revenue = %s, cost = %s, profit = %s, quantity = %s,
+               items = COALESCE(%s, items), status = %s, completed_at = %s
+         WHERE id = %s
+        """,
+        (row["revenue"], row["cost"], row["profit"], count or None, row["items"], status, completed_at, account_id),
+    )
+
+
+def migrate_account_items(cur):
+    """把历史「一单一执照」的数据迁移成明细：每个老订单补一条明细，进度挂到该明细上。"""
+    cur.execute(
+        """
+        INSERT INTO account_items (
+            account_id, license_name, credit_code, legal_person, legal_id, items,
+            unit_price, quantity, revenue, cost, profit, status, completed_at, remark, sort, created_at
+        )
+        SELECT a.id, a.license_name, a.credit_code, a.legal_person, a.legal_id, a.items,
+               a.unit_price, a.quantity, a.revenue, a.cost, a.profit,
+               COALESCE(a.status, 'pending'), a.completed_at, a.remark, 0, a.created_at
+          FROM account_records a
+         WHERE NOT EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id)
+           AND (COALESCE(a.client, '') <> '' OR COALESCE(a.items, '') <> ''
+                OR COALESCE(a.license_name, '') <> '' OR a.revenue IS NOT NULL)
+        """
+    )
+    # 历史备注里常写着手机号，手机号为空时顺手补上，省得每条订单都手工回填
+    cur.execute(
+        """
+        UPDATE account_records
+           SET phone = substring(remark from '(1[3-9][0-9]{9})')
+         WHERE COALESCE(phone, '') = ''
+           AND remark ~ '1[3-9][0-9]{9}'
+        """
+    )
+    # 老进度没有明细归属，挂到该订单的第一条明细上，进度页才不会出现「孤儿任务」
+    cur.execute(
+        """
+        UPDATE order_progress p
+           SET item_id = sub.id
+          FROM (SELECT account_id, MIN(id) AS id FROM account_items GROUP BY account_id) sub
+         WHERE p.account_id = sub.account_id AND p.item_id IS NULL
+        """
+    )
 
 
 def init_db():
@@ -459,6 +619,36 @@ def init_db():
         ALTER TABLE account_records ADD COLUMN IF NOT EXISTS legal_id text
         """,
         """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS phone text
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS account_items (
+            id serial PRIMARY KEY,
+            account_id integer NOT NULL REFERENCES account_records(id) ON DELETE CASCADE,
+            license_name text,
+            credit_code text,
+            legal_person text,
+            legal_id text,
+            biz_status text,
+            tax_status text,
+            items text,
+            unit_price numeric,
+            quantity numeric DEFAULT 1,
+            revenue numeric,
+            cost numeric,
+            profit numeric,
+            status text DEFAULT 'pending',
+            completed_at bigint,
+            remark text,
+            sort integer NOT NULL DEFAULT 0,
+            created_at timestamptz NOT NULL DEFAULT now()
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS account_items_account_idx
+        ON account_items (account_id, sort, id)
+        """,
+        """
         CREATE TABLE IF NOT EXISTS order_progress (
             id serial PRIMARY KEY,
             account_id integer NOT NULL REFERENCES account_records(id) ON DELETE CASCADE,
@@ -469,6 +659,19 @@ def init_db():
             timestamp bigint NOT NULL,
             created_at timestamptz NOT NULL DEFAULT now()
         )
+        """,
+        """
+        ALTER TABLE order_progress ADD COLUMN IF NOT EXISTS item_id integer
+        """,
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'order_progress_item_fk') THEN
+                ALTER TABLE order_progress
+                ADD CONSTRAINT order_progress_item_fk
+                FOREIGN KEY (item_id) REFERENCES account_items(id) ON DELETE CASCADE;
+            END IF;
+        END $$
         """,
         """
         CREATE INDEX IF NOT EXISTS order_progress_account_idx
@@ -522,6 +725,7 @@ def init_db():
             cur.execute("SELECT COUNT(*) FROM users")
             if cur.fetchone()[0] == 0:
                 seed(cur)
+            migrate_account_items(cur)
             sync_account_route(cur)
             seed_menus(cur)
             seed_platforms(cur)
@@ -754,6 +958,7 @@ class App(BaseHTTPRequestHandler):
             self.dispatch(method, path, query, body, user)
         except Exception as exc:
             print("ERROR", exc, flush=True)
+            traceback.print_exc()
             self.send_json({"code": 50000, "message": "Server error"})
 
     def dispatch(self, method, path, query, body, user):
@@ -1203,39 +1408,55 @@ class App(BaseHTTPRequestHandler):
         if query.get("keyword"):
             keyword = "%" + query["keyword"] + "%"
             where.append(
-                "(client ILIKE %s OR items ILIKE %s OR category ILIKE %s OR remark ILIKE %s"
-                " OR license_name ILIKE %s OR credit_code ILIKE %s OR legal_person ILIKE %s)"
+                "(a.client ILIKE %s OR a.items ILIKE %s OR a.category ILIKE %s OR a.remark ILIKE %s"
+                " OR a.phone ILIKE %s"
+                " OR EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND ("
+                " i.license_name ILIKE %s OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s"
+                " OR i.items ILIKE %s)))"
             )
-            params.extend([keyword] * 7)
+            params.extend([keyword] * 9)
         if query.get("status"):
-            where.append("status = %s")
+            where.append("a.status = %s")
             params.append(query["status"])
         if query.get("category"):
-            where.append("category = %s")
+            where.append("a.category = %s")
             params.append(query["category"])
         if query.get("platform"):
-            where.append("platform = %s")
+            where.append("a.platform = %s")
             params.append(query["platform"])
+        if query.get("biz_status"):
+            where.append(
+                "EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND i.biz_status = %s)"
+            )
+            params.append(query["biz_status"])
+        if query.get("tax_status"):
+            where.append(
+                "EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND i.tax_status = %s)"
+            )
+            params.append(query["tax_status"])
         if query.get("month"):
             # biz_date 存 "MM/dd"（历史上有 "YYYY-MM-dd"），两种写法都按月份前缀匹配
             month = str(query["month"]).split("-")[-1].strip()
-            where.append("(biz_date LIKE %s OR biz_date LIKE %s)")
+            where.append("(a.biz_date LIKE %s OR a.biz_date LIKE %s)")
             params.extend([month + "/%", "%-" + month + "-%"])
-        sql = "SELECT * FROM account_records"
+        sql = "SELECT * FROM account_records a"
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY id DESC"
+        sql += " ORDER BY a.id DESC"
         page = max(int(query.get("page") or 1), 1)
         limit = min(max(int(query.get("limit") or 20), 1), 200)
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
-                    "SELECT COUNT(*) AS total FROM account_records" + (" WHERE " + " AND ".join(where) if where else ""),
+                    "SELECT COUNT(*) AS total FROM account_records a"
+                    + (" WHERE " + " AND ".join(where) if where else ""),
                     params,
                 )
                 total = cur.fetchone()["total"]
                 cur.execute(sql + " LIMIT %s OFFSET %s", params + [limit, (page - 1) * limit])
-                items = [account_out(row) for row in cur.fetchall()]
+                rows = cur.fetchall()
+                grouped = fetch_details(cur, [row["id"] for row in rows])
+                items = [account_out(row, grouped.get(row["id"], [])) for row in rows]
         self.send_json({"code": 20000, "data": {"total": total, "items": items}})
 
     def account_detail(self, query):
@@ -1243,10 +1464,11 @@ class App(BaseHTTPRequestHandler):
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT * FROM account_records WHERE id = %s", (int(query.get("id") or 0),))
                 row = cur.fetchone()
-        if row is None:
-            self.send_json({"code": 50000, "message": "Record not found"})
-            return
-        self.send_json({"code": 20000, "data": account_out(row)})
+                if row is None:
+                    self.send_json({"code": 50000, "message": "Record not found"})
+                    return
+                grouped = fetch_details(cur, [row["id"]])
+        self.send_json({"code": 20000, "data": account_out(row, grouped.get(row["id"], []))})
 
     def account_summary(self, query=None):
         where_sql = ""
@@ -1281,6 +1503,8 @@ class App(BaseHTTPRequestHandler):
         })
 
     def account_values(self, body, user, existing=None):
+        """订单级字段。金额、状态、业务项由执照明细回算，这里只处理客户与基础信息。"""
+
         def pick(key, default=""):
             if key in body:
                 return body.get(key)
@@ -1289,39 +1513,76 @@ class App(BaseHTTPRequestHandler):
             return default
 
         stamp = parse_ms(body.get("timestamp") if "timestamp" in body else (existing["timestamp"] if existing else None))
-        unit_price = to_number(pick("unit_price"), None)
-        quantity = to_number(pick("quantity", 1), 1)
-        revenue = to_number(pick("revenue"), None)
-        if "revenue" not in body and ("unit_price" in body or "quantity" in body):
-            revenue = None
-        if revenue is None and unit_price is not None:
-            revenue = unit_price * quantity
-        cost = to_number(pick("cost"), None)
-        profit = to_number(body.get("profit"), None) if "profit" in body else None
-        if profit is None and revenue is not None and cost is not None:
-            profit = revenue - cost
         biz_date = pick("biz_date")
         if not biz_date:
             # 服务器在 UTC，业务日期按北京时间算，避免凌晨录入落到前一天/前一月
             moment = datetime.fromtimestamp(stamp / 1000, tz=timezone.utc) + timedelta(hours=8)
             biz_date = moment.strftime("%m/%d")
-        status = pick("status", "pending") or "pending"
-        if status not in ("pending", "doing", "done"):
-            status = "pending"
-        # 完成时间：状态为已完成时记录（首次完成取当前时间，之后保持不变），
-        # 状态改回待定/进行中则清空，等再次完成时重新记录
-        if status == "done":
-            prior = existing.get("completed_at") if existing is not None else None
-            completed_at = int(prior) if prior else now_ms()
-        else:
-            completed_at = None
+        details = body.get("details") if isinstance(body.get("details"), list) else []
+        first = details[0] if details else {}
         return {
             "timestamp": stamp,
             "biz_date": biz_date,
             "category": pick("category"),
             "client": pick("client"),
+            "phone": (pick("phone") or "").strip(),
             "platform": pick("platform"),
-            "items": pick("items"),
+            "items": (first.get("items") or "").strip() or pick("items", ""),
+            "unit_price": None,
+            "quantity": None,
+            "revenue": None,
+            "cost": None,
+            "profit": None,
+            "status": pick("status", "pending") or "pending",
+            "completed_at": None,
+            "remark": pick("remark"),
+            "creator": pick("creator") or (user["username"] if user else ""),
+            "license_name": (first.get("license_name") or "").strip() or (pick("license_name") or "").strip(),
+            "credit_code": ((first.get("credit_code") or "").strip() or (pick("credit_code") or "")).strip().upper(),
+            "legal_person": (first.get("legal_person") or "").strip() or (pick("legal_person") or "").strip(),
+            "legal_id": ((first.get("legal_id") or "").strip() or (pick("legal_id") or "")).strip().upper(),
+        }
+
+    def detail_values(self, body, existing=None):
+        """一条执照明细（= 一个任务）的字段。"""
+
+        def pick(key, default=""):
+            if key in body:
+                return body.get(key)
+            if existing is not None:
+                return existing.get(key)
+            return default
+
+        unit_price = to_number(pick("unit_price"), None)
+        quantity = to_number(pick("quantity", 1), 1)
+        if not quantity or quantity <= 0:
+            quantity = 1
+        revenue = to_number(pick("revenue"), None)
+        if revenue is None and unit_price is not None:
+            revenue = unit_price * quantity
+        cost = to_number(pick("cost"), None)
+        profit = to_number(pick("profit"), None)
+        if profit is None and revenue is not None and cost is not None:
+            profit = revenue - cost
+        status = pick("status", "pending") or "pending"
+        if status not in ("pending", "doing", "done"):
+            status = "pending"
+        # 完成时间：首次完成取当时时间，之后保持；退回待定/进行中则清空
+        if status == "done":
+            prior = existing.get("completed_at") if existing is not None else None
+            completed_at = int(prior) if prior else now_ms()
+        else:
+            completed_at = None
+        biz_status = (pick("biz_status") or "").strip()
+        tax_status = (pick("tax_status") or "").strip()
+        return {
+            "license_name": (pick("license_name") or "").strip(),
+            "credit_code": (pick("credit_code") or "").strip().upper(),
+            "legal_person": (pick("legal_person") or "").strip(),
+            "legal_id": (pick("legal_id") or "").strip().upper(),
+            "biz_status": biz_status,
+            "tax_status": tax_status,
+            "items": (pick("items") or "").strip(),
             "unit_price": unit_price,
             "quantity": quantity,
             "revenue": revenue,
@@ -1329,15 +1590,88 @@ class App(BaseHTTPRequestHandler):
             "profit": profit,
             "status": status,
             "completed_at": completed_at,
-            "remark": pick("remark"),
-            "creator": pick("creator") or (user["username"] if user else ""),
-            "license_name": (pick("license_name") or "").strip(),
-            "credit_code": (pick("credit_code") or "").strip().upper(),
-            "legal_person": (pick("legal_person") or "").strip(),
-            "legal_id": (pick("legal_id") or "").strip().upper(),
+            "remark": (pick("remark") or "").strip(),
         }
 
+    def insert_detail(self, cur, account_id, values, position, operator, account_record):
+        columns = [
+            "account_id", "license_name", "credit_code", "legal_person", "legal_id",
+            "biz_status", "tax_status", "items", "unit_price", "quantity",
+            "revenue", "cost", "profit", "status", "completed_at", "remark", "sort",
+        ]
+        params = [
+            account_id, values["license_name"], values["credit_code"], values["legal_person"], values["legal_id"],
+            values["biz_status"], values["tax_status"], values["items"], values["unit_price"], values["quantity"],
+            values["revenue"], values["cost"], values["profit"], values["status"], values["completed_at"],
+            values["remark"], position,
+        ]
+        cur.execute(
+            "INSERT INTO account_items (" + ", ".join(columns) + ") VALUES ("
+            + ", ".join(["%s"] * len(columns)) + ") RETURNING *",
+            params,
+        )
+        row = cur.fetchone()
+        # 每个执照就是一条任务，录入即生成「已录入」进度
+        auto_progress(cur, account_record, operator, row["id"], values)
+        return row
+
+    def sync_details(self, cur, account_id, details, operator, account_record):
+        """按提交的明细做增删改：保留 id 的更新，无 id 的新建，未提交的删除（进度级联删除）。"""
+        cur.execute("SELECT * FROM account_items WHERE account_id = %s ORDER BY sort, id", (account_id,))
+        existing = {row["id"]: row for row in cur.fetchall()}
+        kept = []
+        position = 0
+        for raw in details:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                item_id = int(raw.get("id") or 0)
+            except (TypeError, ValueError):
+                item_id = 0
+            current = existing.get(item_id)
+            values = self.detail_values(raw, current)
+            if current is None:
+                row = self.insert_detail(cur, account_id, values, position, operator, account_record)
+                kept.append(row["id"])
+            else:
+                cur.execute(
+                    """
+                    UPDATE account_items
+                       SET license_name = %s, credit_code = %s, legal_person = %s, legal_id = %s,
+                           biz_status = %s, tax_status = %s, items = %s, unit_price = %s, quantity = %s,
+                           revenue = %s, cost = %s, profit = %s, status = %s, completed_at = %s,
+                           remark = %s, sort = %s
+                     WHERE id = %s
+                    """,
+                    (
+                        values["license_name"], values["credit_code"], values["legal_person"], values["legal_id"],
+                        values["biz_status"], values["tax_status"], values["items"], values["unit_price"],
+                        values["quantity"], values["revenue"], values["cost"], values["profit"],
+                        values["status"], values["completed_at"], values["remark"], position, item_id,
+                    ),
+                )
+                kept.append(item_id)
+                if values["status"] != (current["status"] or "pending"):
+                    label = {"pending": "待定", "doing": "进行中", "done": "已完成"}.get(values["status"], values["status"])
+                    note = "任务状态更新为「%s」" % label
+                    if values["status"] == "done":
+                        note = "任务已完成，完成时间 " + format_completed(values["completed_at"])
+                    insert_progress(
+                        cur, account_id, "已完成" if values["status"] == "done" else "状态变更",
+                        "done" if values["status"] == "done" else "doing",
+                        note, operator, None, item_id,
+                    )
+            position += 1
+        removed = [item_id for item_id in existing if item_id not in kept]
+        if removed:
+            cur.execute("DELETE FROM account_items WHERE id = ANY(%s)", (removed,))
+        recalc_order(cur, account_id)
+
     def account_create(self, body, user):
+        details = body.get("details")
+        if not isinstance(details, list) or not [d for d in details if isinstance(d, dict)]:
+            self.send_json({"code": 50000, "message": "订单至少需要一个执照明细（每个执照对应一条任务）"})
+            return
         values = self.account_values(body, user)
         columns = ACCOUNT_FIELDS + ["completed_at"]
         params = [values[column] for column in columns]
@@ -1350,16 +1684,22 @@ class App(BaseHTTPRequestHandler):
                 cur.execute(sql, params)
                 row = cur.fetchone()
                 operator = user["username"] if user else ""
-                # 订单录入的同时自动建一条初始进度，保证每个订单都有进度可跟
-                auto_progress(cur, account_out(row), operator)
-                # 录入时就标记已完成的，补一条完成记录，保证完成时间在进度里可查
-                if (row["status"] or "") == "done":
-                    insert_progress(
-                        cur, row["id"], "已完成", "done",
-                        "订单已完成，完成时间 " + format_completed(row["completed_at"]), operator,
-                    )
+                account_record = {
+                    "id": row["id"],
+                    "client": values["client"],
+                    "items": values["items"],
+                    "revenue": None,
+                    "timestamp": values["timestamp"],
+                }
+                for position, raw in enumerate(details):
+                    dv = self.detail_values(raw)
+                    self.insert_detail(cur, row["id"], dv, position, operator, account_record)
+                recalc_order(cur, row["id"])
+                cur.execute("SELECT * FROM account_records WHERE id = %s", (row["id"],))
+                row = cur.fetchone()
+                grouped = fetch_details(cur, [row["id"]])
             conn.commit()
-        self.send_json({"code": 20000, "data": account_out(row)})
+        self.send_json({"code": 20000, "data": account_out(row, grouped.get(row["id"], []))})
 
     def account_update(self, body, user=None):
         record_id = int(body.get("id") or 0)
@@ -1371,39 +1711,44 @@ class App(BaseHTTPRequestHandler):
                     self.send_json({"code": 50000, "message": "Record not found"})
                     return
                 values = self.account_values(body, None, existing)
+                computed = (
+                    "revenue", "cost", "profit", "status", "quantity", "unit_price", "items",
+                    "license_name", "credit_code", "legal_person", "legal_id", "completed_at",
+                )
                 assignments = []
                 params = []
                 for column in ACCOUNT_FIELDS:
-                    if column not in body and column not in ("timestamp", "revenue", "profit"):
+                    if column not in body and column not in ("timestamp",):
+                        continue
+                    if column in computed:
                         continue
                     assignments.append(column + " = %s")
                     params.append(values[column])
-                if "status" in body:
-                    assignments.append("completed_at = %s")
-                    params.append(values["completed_at"])
-                if not assignments:
-                    self.send_json({"code": 20000, "data": account_out(existing)})
-                    return
-                params.append(record_id)
-                cur.execute(
-                    "UPDATE account_records SET " + ", ".join(assignments) + " WHERE id = %s RETURNING *",
-                    params,
-                )
-                row = cur.fetchone()
-                new_status = values["status"]
-                if "status" in body and new_status != (existing["status"] or "pending"):
-                    label = {"pending": "待定", "doing": "进行中", "done": "已完成"}.get(new_status, new_status)
-                    if new_status == "done":
-                        note = "订单已完成，完成时间 " + format_completed(values["completed_at"])
-                    else:
-                        note = "订单状态更新为「%s」" % label
-                    insert_progress(
-                        cur, record_id, "已完成" if new_status == "done" else "状态变更",
-                        "done" if new_status == "done" else "doing",
-                        note, user["username"] if user else "",
+                # 没有明细的纯状态更新（兼容旧调用）才允许直接改订单状态
+                if "status" in body and not isinstance(body.get("details"), list):
+                    assignments.append("status = %s")
+                    params.append(values["status"])
+                if assignments:
+                    params.append(record_id)
+                    cur.execute(
+                        "UPDATE account_records SET " + ", ".join(assignments) + " WHERE id = %s",
+                        params,
                     )
+                if isinstance(body.get("details"), list):
+                    operator = user["username"] if user else ""
+                    account_record = {
+                        "id": record_id,
+                        "client": values["client"],
+                        "items": values["items"],
+                        "revenue": None,
+                        "timestamp": values["timestamp"],
+                    }
+                    self.sync_details(cur, record_id, body["details"], operator, account_record)
+                cur.execute("SELECT * FROM account_records WHERE id = %s", (record_id,))
+                row = cur.fetchone()
+                grouped = fetch_details(cur, [record_id])
             conn.commit()
-        self.send_json({"code": 20000, "data": account_out(row)})
+        self.send_json({"code": 20000, "data": account_out(row, grouped.get(record_id, []))})
 
     def account_delete(self, body):
         with connect() as conn:
@@ -1415,60 +1760,113 @@ class App(BaseHTTPRequestHandler):
     # ---------------- 订单进度 ----------------
 
     def progress_list(self, query):
+        """某个任务（执照明细）的完整跟进记录。"""
+        item_id = int(query.get("item_id") or 0)
         account_id = int(query.get("account_id") or 0)
-        if not account_id:
-            self.send_json({"code": 50000, "message": "缺少订单 id"})
+        if not item_id and not account_id:
+            self.send_json({"code": 50000, "message": "缺少任务 id"})
             return
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT * FROM order_progress WHERE account_id = %s ORDER BY timestamp ASC, id ASC",
-                    (account_id,),
-                )
+                if item_id:
+                    cur.execute(
+                        "SELECT * FROM order_progress WHERE item_id = %s ORDER BY timestamp ASC, id ASC",
+                        (item_id,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT * FROM order_progress WHERE account_id = %s ORDER BY timestamp ASC, id ASC",
+                        (account_id,),
+                    )
                 items = [progress_out(row) for row in cur.fetchall()]
-        self.send_json({"code": 20000, "data": {"items": items, "steps": PROGRESS_STEPS}})
+                item = None
+                if item_id:
+                    cur.execute("SELECT * FROM account_items WHERE id = %s", (item_id,))
+                    item_row = cur.fetchone()
+                    if item_row is not None:
+                        cur.execute("SELECT * FROM account_records WHERE id = %s", (item_row["account_id"],))
+                        account_row = cur.fetchone()
+                        item = item_out(item_row)
+                        if account_row is not None:
+                            item.update({
+                                "client": account_row["client"] or "",
+                                "phone": account_row["phone"] or "",
+                                "biz_date": account_row["biz_date"] or "",
+                                "category": account_row["category"] or "",
+                                "account_status": account_row["status"] or "pending",
+                            })
+        self.send_json({"code": 20000, "data": {"items": items, "steps": PROGRESS_STEPS, "item": item}})
 
     def progress_overview(self, query):
+        """任务总览：一行 = 一条执照明细，带该任务最新进度。"""
         where = []
         params = []
         keyword = (query.get("keyword") or "").strip()
         if keyword:
-            where.append("(a.client ILIKE %s OR a.items ILIKE %s OR a.remark ILIKE %s)")
-            params.extend(["%" + keyword + "%"] * 3)
+            where.append(
+                "(a.client ILIKE %s OR a.phone ILIKE %s OR i.items ILIKE %s OR i.license_name ILIKE %s"
+                " OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s)"
+            )
+            params.extend(["%" + keyword + "%"] * 6)
         if query.get("status"):
-            where.append("a.status = %s")
+            where.append("i.status = %s")
             params.append(query["status"])
+        if query.get("biz_status"):
+            where.append("i.biz_status = %s")
+            params.append(query["biz_status"])
+        if query.get("tax_status"):
+            where.append("i.tax_status = %s")
+            params.append(query["tax_status"])
+        if query.get("month"):
+            month = str(query["month"]).split("-")[-1].strip()
+            where.append("(a.biz_date LIKE %s OR a.biz_date LIKE %s)")
+            params.extend([month + "/%", "%-" + month + "-%"])
         condition = (" WHERE " + " AND ".join(where)) if where else ""
         page = max(int(query.get("page") or 1), 1)
         limit = min(max(int(query.get("limit") or 20), 1), 200)
         sql = """
-            SELECT a.*,
+            SELECT i.*, a.client, a.phone, a.biz_date, a.category, a.platform,
+                   a.status AS account_status,
                    p.step AS last_step,
                    p.status AS last_status,
                    p.note AS last_note,
                    p.operator AS last_operator,
                    p.timestamp AS last_timestamp,
                    COALESCE(c.cnt, 0) AS progress_count
-              FROM account_records a
+              FROM account_items i
+              JOIN account_records a ON a.id = i.account_id
               LEFT JOIN LATERAL (
                    SELECT * FROM order_progress
-                    WHERE account_id = a.id
+                    WHERE item_id = i.id
                     ORDER BY timestamp DESC, id DESC
                     LIMIT 1
               ) p ON TRUE
               LEFT JOIN (
-                   SELECT account_id, COUNT(*) AS cnt FROM order_progress GROUP BY account_id
-              ) c ON c.account_id = a.id
+                   SELECT item_id, COUNT(*) AS cnt FROM order_progress
+                    WHERE item_id IS NOT NULL GROUP BY item_id
+              ) c ON c.item_id = i.id
         """
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT COUNT(*) AS total FROM account_records a" + condition, params)
+                cur.execute(
+                    "SELECT COUNT(*) AS total FROM account_items i JOIN account_records a ON a.id = i.account_id" + condition,
+                    params,
+                )
                 total = cur.fetchone()["total"]
-                cur.execute(sql + condition + " ORDER BY a.id DESC LIMIT %s OFFSET %s", params + [limit, (page - 1) * limit])
+                cur.execute(
+                    sql + condition + " ORDER BY a.id DESC, i.sort, i.id LIMIT %s OFFSET %s",
+                    params + [limit, (page - 1) * limit],
+                )
                 items = []
                 for row in cur.fetchall():
-                    record = account_out(row)
+                    record = item_out(row)
                     record.update({
+                        "client": row["client"] or "",
+                        "phone": row["phone"] or "",
+                        "biz_date": row["biz_date"] or "",
+                        "category": row["category"] or "",
+                        "platform": row["platform"] or "",
+                        "account_status": row["account_status"] or "pending",
                         "last_step": row["last_step"] or "",
                         "last_status": row["last_status"] or "",
                         "last_note": row["last_note"] or "",
@@ -1484,46 +1882,74 @@ class App(BaseHTTPRequestHandler):
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
                     SELECT step, COUNT(*) AS cnt FROM (
-                        SELECT DISTINCT ON (account_id) account_id, step
+                        SELECT DISTINCT ON (item_id) item_id, step
                           FROM order_progress
-                         ORDER BY account_id, timestamp DESC, id DESC
+                         WHERE item_id IS NOT NULL
+                         ORDER BY item_id, timestamp DESC, id DESC
                     ) latest GROUP BY step ORDER BY cnt DESC, step
                 """)
                 by_step = [{"step": row["step"], "count": int(row["cnt"])} for row in cur.fetchall()]
-                cur.execute("SELECT COUNT(DISTINCT account_id) AS cnt FROM order_progress")
+                cur.execute("SELECT COUNT(DISTINCT item_id) AS cnt FROM order_progress WHERE item_id IS NOT NULL")
                 covered = int(cur.fetchone()["cnt"] or 0)
+                cur.execute("SELECT COUNT(*) AS cnt FROM account_items")
+                tasks = int(cur.fetchone()["cnt"] or 0)
                 cur.execute("SELECT COUNT(*) AS cnt FROM account_records")
                 orders = int(cur.fetchone()["cnt"] or 0)
+                cur.execute("SELECT COUNT(*) AS cnt FROM account_items WHERE status = 'done'")
+                done = int(cur.fetchone()["cnt"] or 0)
                 cur.execute("""
-                    SELECT COUNT(*) AS cnt FROM account_records a
-                     WHERE NOT EXISTS (SELECT 1 FROM order_progress p WHERE p.account_id = a.id)
+                    SELECT COUNT(*) AS cnt FROM account_items i
+                     WHERE NOT EXISTS (SELECT 1 FROM order_progress p WHERE p.item_id = i.id)
                 """)
                 missing = int(cur.fetchone()["cnt"] or 0)
         self.send_json({
             "code": 20000,
-            "data": {"by_step": by_step, "covered": covered, "orders": orders, "missing": missing},
+            "data": {
+                "by_step": by_step, "covered": covered, "tasks": tasks,
+                "orders": orders, "done": done, "missing": missing,
+            },
         })
 
     def progress_create(self, body, user):
+        item_id = int(body.get("item_id") or 0)
         account_id = int(body.get("account_id") or 0)
         step = (body.get("step") or "").strip()
-        if not account_id or not step:
-            self.send_json({"code": 50000, "message": "订单与进度阶段不能为空"})
+        if not step or (not item_id and not account_id):
+            self.send_json({"code": 50000, "message": "任务与进度阶段不能为空"})
             return
         status = body.get("status") or "doing"
+        operator = user["username"] if user else ""
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT id, status FROM account_records WHERE id = %s", (account_id,))
-                if cur.fetchone() is None:
-                    self.send_json({"code": 50000, "message": "订单不存在"})
-                    return
-                insert_progress(cur, account_id, step, status, body.get("note"), user["username"] if user else "")
-                # 进度推进到「已完成」时同步订单状态
+                item = None
+                if item_id:
+                    cur.execute("SELECT * FROM account_items WHERE id = %s", (item_id,))
+                    item = cur.fetchone()
+                    if item is None:
+                        self.send_json({"code": 50000, "message": "任务不存在"})
+                        return
+                    account_id = item["account_id"]
+                else:
+                    cur.execute(
+                        "SELECT * FROM account_items WHERE account_id = %s ORDER BY sort, id LIMIT 1",
+                        (account_id,),
+                    )
+                    item = cur.fetchone()
+                    if item is None:
+                        self.send_json({"code": 50000, "message": "该订单还没有执照明细"})
+                        return
+                    item_id = item["id"]
+                insert_progress(cur, account_id, step, status, body.get("note"), operator, None, item_id)
+                # 进度推进到「已完成」时同步任务状态
                 if step == "已完成":
-                    cur.execute("UPDATE account_records SET status = 'done' WHERE id = %s", (account_id,))
+                    cur.execute(
+                        "UPDATE account_items SET status = 'done', completed_at = COALESCE(completed_at, %s) WHERE id = %s",
+                        (now_ms(), item_id),
+                    )
                 elif status == "doing":
-                    cur.execute("UPDATE account_records SET status = 'doing' WHERE id = %s AND status = 'pending'", (account_id,))
-                cur.execute("SELECT * FROM order_progress WHERE account_id = %s ORDER BY id DESC LIMIT 1", (account_id,))
+                    cur.execute("UPDATE account_items SET status = 'doing' WHERE id = %s AND status = 'pending'", (item_id,))
+                recalc_order(cur, account_id)
+                cur.execute("SELECT * FROM order_progress WHERE item_id = %s ORDER BY id DESC LIMIT 1", (item_id,))
                 row = cur.fetchone()
             conn.commit()
         self.send_json({"code": 20000, "data": progress_out(row)})

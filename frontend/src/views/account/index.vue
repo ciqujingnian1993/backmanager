@@ -49,20 +49,38 @@
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
-        placeholder="搜索客户 / 业务项 / 执照 / 法人"
+        placeholder="搜索客户 / 手机号 / 执照 / 法人"
         clearable
         @keyup.enter.native="handleFilter"
       />
       <el-select
         v-model="listQuery.status"
         class="filter-item"
-        placeholder="状态"
+        placeholder="订单状态"
         clearable
         @change="handleFilter"
       >
         <el-option label="待定" value="pending" />
         <el-option label="进行中" value="doing" />
         <el-option label="已完成" value="done" />
+      </el-select>
+      <el-select
+        v-model="listQuery.biz_status"
+        class="filter-item"
+        placeholder="工商状态"
+        clearable
+        @change="handleFilter"
+      >
+        <el-option v-for="item in bizStatusOptions" :key="item" :label="item" :value="item" />
+      </el-select>
+      <el-select
+        v-model="listQuery.tax_status"
+        class="filter-item"
+        placeholder="税务状态"
+        clearable
+        @change="handleFilter"
+      >
+        <el-option v-for="item in taxStatusOptions" :key="item" :label="item" :value="item" />
       </el-select>
       <el-select
         v-model="listQuery.platform"
@@ -100,9 +118,14 @@
                 <div class="chat-bubble">
                   <div class="chat-text">{{ item.message }}</div>
                   <div class="chat-meta">
-                    <el-tag :type="statusType(item.status)" size="mini">
-                      {{ statusText(item.status) }}
-                    </el-tag>
+                    <span class="chat-tags">
+                      <el-tag :type="statusType(item.status)" size="mini">
+                        {{ statusText(item.status) }}
+                      </el-tag>
+                      <el-tag v-if="item.license_count" size="mini" effect="plain" class="license-tag">
+                        {{ item.license_count }} 个执照 · 完成 {{ item.done_count }}
+                      </el-tag>
+                    </span>
                     <span class="chat-ops">
                       <el-button type="text" size="mini" @click="handleDetail(item)">详情</el-button>
                       <el-button type="text" size="mini" @click="handleUpdate(item)">编辑</el-button>
@@ -135,65 +158,52 @@
           highlight-current-row
           style="width: 100%"
         >
-          <el-table-column prop="biz_date" label="日期" width="100" align="center" />
-          <el-table-column prop="category" label="行业" width="100" align="center" />
-          <el-table-column prop="client" label="客户" min-width="120" show-overflow-tooltip />
-          <el-table-column label="执照名称" min-width="180">
+          <el-table-column type="expand">
             <template slot-scope="{ row }">
-              <el-tooltip
-                v-if="hasLicense(row)"
-                placement="top"
-                :open-delay="200"
-              >
-                <div slot="content" style="line-height: 1.9; font-size: 12px;">
-                  <div>执照名称：{{ row.license_name || '—' }}</div>
-                  <div>统一信用编码：{{ row.credit_code || '—' }}</div>
-                  <div>法人姓名：{{ row.legal_person || '—' }}</div>
-                  <div>法人身份证号：{{ maskId(row.legal_id) }}</div>
-                </div>
-                <span class="license-name" @click="handleDetail(row)">{{ row.license_name || '查看执照信息' }}</span>
-              </el-tooltip>
+              <order-items-table :details="row.details" />
+            </template>
+          </el-table-column>
+          <el-table-column prop="biz_date" label="日期" width="88" align="center" />
+          <el-table-column prop="category" label="行业" width="92" align="center" />
+          <el-table-column prop="client" label="客户" min-width="100" show-overflow-tooltip />
+          <el-table-column label="手机号" width="116">
+            <template slot-scope="{ row }">
+              <span v-if="row.phone">{{ row.phone }}</span>
               <span v-else class="muted-text">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="平台" width="90" align="center">
+          <el-table-column label="平台" width="78" align="center">
             <template slot-scope="{ row }">
               <el-tag v-if="row.platform" size="mini" effect="plain">{{ row.platform }}</el-tag>
               <span v-else class="muted-text">—</span>
             </template>
           </el-table-column>
-          <el-table-column prop="items" label="业务项" min-width="120" show-overflow-tooltip />
-          <el-table-column label="单价" width="90" align="center">
-            <template slot-scope="{ row }">{{ amount(row.unit_price) }}</template>
+          <el-table-column label="执照" width="100" align="center">
+            <template slot-scope="{ row }">
+              <el-button type="text" size="mini" @click="handleDetail(row)">
+                {{ row.license_count }} 个（完成 {{ row.done_count }}）
+              </el-button>
+            </template>
           </el-table-column>
-          <el-table-column label="数量" width="70" align="center">
-            <template slot-scope="{ row }">{{ row.quantity }}</template>
-          </el-table-column>
-          <el-table-column label="收入" width="90" align="center">
+          <el-table-column prop="items" label="业务项" min-width="108" show-overflow-tooltip />
+          <el-table-column label="收入" width="82" align="center">
             <template slot-scope="{ row }">{{ amount(row.revenue) }}</template>
           </el-table-column>
-          <el-table-column label="成本" width="90" align="center">
-            <template slot-scope="{ row }">{{ amount(row.cost) }}</template>
-          </el-table-column>
-          <el-table-column label="利润" width="90" align="center">
-            <template slot-scope="{ row }">{{ amount(row.profit) }}</template>
-          </el-table-column>
-          <el-table-column label="状态" width="85" align="center">
+          <el-table-column label="状态" width="80" align="center">
             <template slot-scope="{ row }">
               <el-tag :type="statusType(row.status)" size="mini">
                 {{ statusText(row.status) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="完成时间" width="132" align="center">
+          <el-table-column label="完成时间" width="138" align="center">
             <template slot-scope="{ row }">{{ completedText(row.completed_at) }}</template>
           </el-table-column>
-          <el-table-column prop="remark" label="备注" min-width="110" show-overflow-tooltip />
-          <el-table-column label="操作" width="200" align="center">
+          <el-table-column label="操作" width="128" align="center" fixed="right">
             <template slot-scope="{ row }">
               <el-button type="text" size="mini" @click="handleDetail(row)">详情</el-button>
-              <el-button type="primary" size="mini" @click="handleUpdate(row)">编辑</el-button>
-              <el-button type="danger" size="mini" @click="handleDelete(row)">删除</el-button>
+              <el-button type="text" size="mini" @click="handleUpdate(row)">编辑</el-button>
+              <el-button type="text" size="mini" class="danger-text" @click="handleDelete(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -211,14 +221,17 @@
     <el-dialog
       :title="dialogType === 'edit' ? '编辑订单' : '新增订单'"
       :visible.sync="dialogVisible"
-      width="760px"
+      width="1020px"
+      top="5vh"
     >
       <el-form
         ref="accountForm"
         :model="form"
         :rules="rules"
         label-width="104px"
+        class="order-form"
       >
+        <div class="form-section-title">订单信息</div>
         <el-row :gutter="16">
           <el-col :span="8">
             <el-form-item label="业务日期" prop="biz_date">
@@ -265,7 +278,6 @@
             </el-form-item>
           </el-col>
         </el-row>
-
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="客户" prop="client">
@@ -273,132 +285,188 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="业务项" prop="items">
-              <el-input v-model="form.items" placeholder="例如 非+注销" />
+            <el-form-item label="手机号" prop="phone">
+              <el-input v-model="form.phone" maxlength="11" placeholder="11 位手机号" clearable />
             </el-form-item>
           </el-col>
         </el-row>
-
-        <div class="form-section-title">执照信息<span class="optional-tip">选填</span></div>
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="执照名称" prop="license_name">
-              <el-input v-model="form.license_name" placeholder="营业执照上的名称" clearable />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="统一信用编码" prop="credit_code">
-              <el-input
-                v-model="form.credit_code"
-                maxlength="18"
-                placeholder="18 位统一社会信用代码"
-                clearable
-                @input="form.credit_code = (form.credit_code || '').toUpperCase()"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="法人姓名" prop="legal_person">
-              <el-input v-model="form.legal_person" placeholder="法定代表人姓名" clearable />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="法人身份证号" prop="legal_id">
-              <el-input
-                v-model="form.legal_id"
-                maxlength="18"
-                placeholder="18 位身份证号"
-                clearable
-                @input="form.legal_id = (form.legal_id || '').toUpperCase()"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-row :gutter="16">
-          <el-col :span="8">
-            <el-form-item label="单价">
-              <el-input-number
-                v-model="form.unit_price"
-                style="width: 100%"
-                :min="0"
-                :precision="2"
-                :step="50"
-                controls-position="right"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="数量">
-              <el-input-number
-                v-model="form.quantity"
-                style="width: 100%"
-                :min="1"
-                :precision="0"
-                controls-position="right"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="收入">
-              <el-input-number
-                v-model="form.revenue"
-                style="width: 100%"
-                :min="0"
-                :precision="2"
-                :step="50"
-                controls-position="right"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-row :gutter="16">
-          <el-col :span="8">
-            <el-form-item label="成本">
-              <el-input-number
-                v-model="form.cost"
-                style="width: 100%"
-                :min="0"
-                :precision="2"
-                :step="50"
-                controls-position="right"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="利润">
-              <el-input-number
-                v-model="form.profit"
-                style="width: 100%"
-                :min="0"
-                :precision="2"
-                :step="50"
-                controls-position="right"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="状态">
-              <el-select v-model="form.status" style="width: 100%">
-                <el-option label="待定" value="pending" />
-                <el-option label="进行中" value="doing" />
-                <el-option label="已完成" value="done" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-        </el-row>
-
         <el-form-item label="备注">
           <el-input
             v-model="form.remark"
             type="textarea"
             :rows="2"
-            placeholder="补充说明，可不填"
+            placeholder="订单层面的补充说明，可不填"
           />
         </el-form-item>
+
+        <div class="form-section-title">
+          执照明细与任务
+          <span class="optional-tip">一个客户可挂多个执照，每个执照单独一条任务、单独跟进度</span>
+          <el-button class="add-detail-btn" type="primary" size="mini" icon="el-icon-plus" @click="addDetail">
+            添加执照
+          </el-button>
+        </div>
+
+        <div
+          v-for="(detail, index) in form.details"
+          :key="index"
+          class="detail-block"
+        >
+          <div class="detail-block-head">
+            <span class="detail-block-title">执照 {{ index + 1 }}</span>
+            <el-tag :type="statusType(detail.status)" size="mini">{{ statusText(detail.status) }}</el-tag>
+            <span class="detail-block-spacer" />
+            <el-button
+              type="text"
+              class="danger-text"
+              :disabled="form.details.length === 1"
+              @click="removeDetail(index)"
+            >
+              删除本执照
+            </el-button>
+          </div>
+
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="执照名称">
+                <el-input v-model="detail.license_name" placeholder="营业执照上的名称" clearable />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item
+                label="统一信用编码"
+                :prop="'details.' + index + '.credit_code'"
+                :rules="detailRules.credit_code"
+              >
+                <el-input
+                  v-model="detail.credit_code"
+                  maxlength="18"
+                  placeholder="18 位统一社会信用代码"
+                  clearable
+                  @input="detail.credit_code = (detail.credit_code || '').toUpperCase()"
+                />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="法人姓名">
+                <el-input v-model="detail.legal_person" placeholder="法定代表人姓名" clearable />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item
+                label="法人身份证号"
+                :prop="'details.' + index + '.legal_id'"
+                :rules="detailRules.legal_id"
+              >
+                <el-input
+                  v-model="detail.legal_id"
+                  maxlength="18"
+                  placeholder="18 位身份证号"
+                  clearable
+                  @input="detail.legal_id = (detail.legal_id || '').toUpperCase()"
+                />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="8">
+              <el-form-item label="工商状态" label-width="82px">
+                <el-select v-model="detail.biz_status" style="width: 100%" clearable placeholder="可不选">
+                  <el-option v-for="item in bizStatusOptions" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="税务状态" label-width="82px">
+                <el-select v-model="detail.tax_status" style="width: 100%" clearable placeholder="可不选">
+                  <el-option v-for="item in taxStatusOptions" :key="item" :label="item" :value="item" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="任务状态" label-width="82px">
+                <el-select v-model="detail.status" style="width: 100%">
+                  <el-option label="待定" value="pending" />
+                  <el-option label="进行中" value="doing" />
+                  <el-option label="已完成" value="done" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="业务项">
+                <el-input v-model="detail.items" placeholder="例如 非+注销 / 年报补报" clearable />
+              </el-form-item>
+            </el-col>
+            <el-col :span="6">
+              <el-form-item label="单价" label-width="62px">
+                <el-input-number
+                  v-model="detail.unit_price"
+                  style="width: 100%"
+                  :min="0"
+                  :precision="2"
+                  :step="50"
+                  controls-position="right"
+                />
+              </el-form-item>
+            </el-col>
+            <el-col :span="6">
+              <el-form-item label="数量" label-width="62px">
+                <el-input-number
+                  v-model="detail.quantity"
+                  style="width: 100%"
+                  :min="1"
+                  :precision="0"
+                  controls-position="right"
+                />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="8">
+              <el-form-item label="收入" label-width="62px">
+                <el-input-number
+                  v-model="detail.revenue"
+                  style="width: 100%"
+                  :min="0"
+                  :precision="2"
+                  :step="50"
+                  controls-position="right"
+                />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="成本" label-width="62px">
+                <el-input-number
+                  v-model="detail.cost"
+                  style="width: 100%"
+                  :min="0"
+                  :precision="2"
+                  :step="50"
+                  controls-position="right"
+                />
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="利润" label-width="62px">
+                <el-input-number
+                  v-model="detail.profit"
+                  style="width: 100%"
+                  :min="0"
+                  :precision="2"
+                  :step="50"
+                  controls-position="right"
+                />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-form-item label="本执照备注">
+            <el-input v-model="detail.remark" placeholder="这个执照的特殊说明，可不填" clearable />
+          </el-form-item>
+        </div>
 
         <el-form-item label="消息预览">
           <div class="preview-bubble">{{ previewMessage }}</div>
@@ -417,6 +485,7 @@
 <script>
 import Pagination from '@/components/Pagination'
 import OrderDetailDialog from './components/OrderDetailDialog'
+import OrderItemsTable from './components/OrderItemsTable'
 import {
   fetchAccountList,
   fetchAccountSummary,
@@ -425,6 +494,7 @@ import {
   deleteAccount
 } from '@/api/account'
 import { fetchPlatformList } from '@/api/platform'
+import { BIZ_STATUS_OPTIONS, TAX_STATUS_OPTIONS } from '@/constants/license'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const STATUS_MAP = {
@@ -437,6 +507,8 @@ const STATUS_MAP = {
 const CREDIT_CODE_RE = /^[0-9A-HJ-NPQRTUWXY]{18}$/
 // 二代身份证：17 位数字 + 校验位（数字或 X）
 const ID_CARD_RE = /^\d{17}[\dX]$/
+// 手机号：11 位，1 开头
+const PHONE_RE = /^1[3-9]\d{9}$/
 
 // 选填字段：填了才校验格式，空着直接放过
 function optionalPattern(pattern, message) {
@@ -450,7 +522,7 @@ function optionalPattern(pattern, message) {
 
 export default {
   name: 'OrderList',
-  components: { Pagination, OrderDetailDialog },
+  components: { Pagination, OrderDetailDialog, OrderItemsTable },
   mixins: [refreshOnActivate],
   data() {
     const now = new Date()
@@ -471,13 +543,17 @@ export default {
       },
       categoryOptions: ['同行业', '代理记账', '工商注册', '变更注销'],
       platformOptions: [],
+      bizStatusOptions: BIZ_STATUS_OPTIONS,
+      taxStatusOptions: TAX_STATUS_OPTIONS,
       listQuery: {
         page: 1,
         limit: 20,
         month: currentMonth,
         keyword: '',
         status: '',
-        platform: ''
+        platform: '',
+        biz_status: '',
+        tax_status: ''
       },
       dialogVisible: false,
       dialogType: 'create',
@@ -488,6 +564,11 @@ export default {
         biz_date: [{ required: true, message: '请选择业务日期', trigger: 'change' }],
         category: [{ required: true, message: '请填写行业', trigger: 'change' }],
         client: [{ required: true, message: '请填写客户', trigger: 'blur' }],
+        phone: [
+          { validator: optionalPattern(PHONE_RE, '手机号为 11 位数字'), trigger: 'blur' }
+        ]
+      },
+      detailRules: {
         credit_code: [
           { validator: optionalPattern(CREDIT_CODE_RE, '统一信用编码为 18 位数字或大写字母'), trigger: 'blur' }
         ],
@@ -505,7 +586,10 @@ export default {
       return this.listQuery.month ? `（${this.listQuery.month}）` : '（全部）'
     },
     filtering() {
-      return Boolean(this.listQuery.month || this.listQuery.keyword || this.listQuery.status || this.listQuery.platform)
+      return Boolean(
+        this.listQuery.month || this.listQuery.keyword || this.listQuery.status ||
+        this.listQuery.platform || this.listQuery.biz_status || this.listQuery.tax_status
+      )
     }
   },
   created() {
@@ -526,15 +610,10 @@ export default {
       this.getSummary()
       this.loadPlatforms()
     },
-    hasLicense(row) {
-      return Boolean(row.license_name || row.credit_code || row.legal_person || row.legal_id)
-    },
-    // 身份证号只露出前 6 后 4，避免在列表里被随手看到/截图
-    maskId(value) {
-      const text = String(value || '').trim()
-      if (!text) return '—'
-      if (text.length <= 10) return text
-      return text.slice(0, 6) + '*'.repeat(text.length - 10) + text.slice(-4)
+    handleTabClick() {
+      if (this.$route.query.tab !== this.activeView) {
+        this.$router.replace({ query: { ...this.$route.query, tab: this.activeView } })
+      }
     },
     async loadPlatforms() {
       try {
@@ -542,6 +621,25 @@ export default {
         this.platformOptions = (data || []).map(item => item.name)
       } catch (error) {
         this.platformOptions = []
+      }
+    },
+    emptyDetail() {
+      return {
+        id: undefined,
+        license_name: '',
+        credit_code: '',
+        legal_person: '',
+        legal_id: '',
+        biz_status: '',
+        tax_status: '',
+        items: '',
+        unit_price: undefined,
+        quantity: 1,
+        revenue: undefined,
+        cost: undefined,
+        profit: undefined,
+        status: 'pending',
+        remark: ''
       }
     },
     emptyForm() {
@@ -553,20 +651,18 @@ export default {
         biz_date: `${month}/${day}`,
         category: '',
         client: '',
+        phone: '',
         platform: '',
-        items: '',
-        unit_price: undefined,
-        quantity: 1,
-        revenue: undefined,
-        cost: undefined,
-        profit: undefined,
-        status: 'pending',
         remark: '',
-        license_name: '',
-        credit_code: '',
-        legal_person: '',
-        legal_id: ''
+        details: [this.emptyDetail()]
       }
+    },
+    addDetail() {
+      this.form.details.push(this.emptyDetail())
+    },
+    removeDetail(index) {
+      if (this.form.details.length <= 1) return
+      this.form.details.splice(index, 1)
     },
     async getList() {
       this.loading = true
@@ -599,6 +695,8 @@ export default {
       this.listQuery.keyword = ''
       this.listQuery.status = ''
       this.listQuery.platform = ''
+      this.listQuery.biz_status = ''
+      this.listQuery.tax_status = ''
       this.listQuery.page = 1
       this.getList()
       this.getSummary()
@@ -623,7 +721,33 @@ export default {
     },
     handleUpdate(row) {
       this.dialogType = 'edit'
-      this.form = Object.assign(this.emptyForm(), row)
+      const details = (row.details || []).map(item => Object.assign(this.emptyDetail(), {
+        id: item.id,
+        license_name: item.license_name,
+        credit_code: item.credit_code,
+        legal_person: item.legal_person,
+        legal_id: item.legal_id,
+        biz_status: item.biz_status,
+        tax_status: item.tax_status,
+        items: item.items,
+        unit_price: item.unit_price === null ? undefined : item.unit_price,
+        quantity: item.quantity === null ? 1 : item.quantity,
+        revenue: item.revenue === null ? undefined : item.revenue,
+        cost: item.cost === null ? undefined : item.cost,
+        profit: item.profit === null ? undefined : item.profit,
+        status: item.status || 'pending',
+        remark: item.remark
+      }))
+      this.form = {
+        id: row.id,
+        biz_date: row.biz_date,
+        category: row.category,
+        client: row.client,
+        phone: row.phone,
+        platform: row.platform,
+        remark: row.remark,
+        details: details.length ? details : [this.emptyDetail()]
+      }
       this.dialogVisible = true
       this.$nextTick(() => {
         this.$refs.accountForm && this.$refs.accountForm.clearValidate()
@@ -634,7 +758,8 @@ export default {
       this.detailVisible = true
     },
     handleDelete(row) {
-      this.$confirm('确认删除这条订单吗？', '提示', {
+      const suffix = row.license_count > 1 ? `（含 ${row.license_count} 个执照任务，进度一并删除）` : ''
+      this.$confirm(`确认删除这条订单吗？${suffix}`, '提示', {
         confirmButtonText: '确定',
         cancelButtonText: '取消',
         type: 'warning'
@@ -650,24 +775,34 @@ export default {
     submitForm() {
       this.$refs.accountForm.validate(valid => {
         if (!valid) return false
+        const details = this.form.details.map(detail => ({
+          id: detail.id,
+          license_name: (detail.license_name || '').trim(),
+          credit_code: (detail.credit_code || '').toUpperCase(),
+          legal_person: (detail.legal_person || '').trim(),
+          legal_id: (detail.legal_id || '').toUpperCase(),
+          biz_status: detail.biz_status || '',
+          tax_status: detail.tax_status || '',
+          items: (detail.items || '').trim(),
+          unit_price: this.numberOrNull(detail.unit_price),
+          quantity: detail.quantity === undefined || detail.quantity === null || detail.quantity === ''
+            ? 1
+            : Number(detail.quantity),
+          revenue: this.numberOrNull(detail.revenue),
+          cost: this.numberOrNull(detail.cost),
+          profit: this.numberOrNull(detail.profit),
+          status: detail.status || 'pending',
+          remark: (detail.remark || '').trim()
+        }))
         const payload = {
           id: this.form.id,
           biz_date: this.form.biz_date,
           category: this.form.category,
           client: this.form.client,
+          phone: this.form.phone || '',
           platform: this.form.platform || '',
-          items: this.form.items,
-          unit_price: this.form.unit_price === undefined ? null : this.form.unit_price,
-          quantity: this.form.quantity === undefined ? 1 : this.form.quantity,
-          revenue: this.form.revenue === undefined ? null : this.form.revenue,
-          cost: this.form.cost === undefined ? null : this.form.cost,
-          profit: this.form.profit === undefined ? null : this.form.profit,
-          status: this.form.status,
           remark: this.form.remark,
-          license_name: this.form.license_name || '',
-          credit_code: (this.form.credit_code || '').toUpperCase(),
-          legal_person: this.form.legal_person || '',
-          legal_id: (this.form.legal_id || '').toUpperCase()
+          details
         }
         const request = this.dialogType === 'edit'
           ? updateAccount(payload)
@@ -676,7 +811,9 @@ export default {
         request
           .then(() => {
             this.$message({
-              message: this.dialogType === 'edit' ? '保存成功' : '订单录入成功，已自动生成进度记录',
+              message: this.dialogType === 'edit'
+                ? '保存成功'
+                : `订单录入成功，已按执照生成 ${details.length} 条任务`,
               type: 'success'
             })
             this.dialogVisible = false
@@ -701,35 +838,57 @@ export default {
       })
     },
     buildMessage(form) {
+      const details = form.details || []
+      const items = details.map(item => (item.items || '').trim()).filter(Boolean)
       const lines = ['【订单】']
       const head = [form.biz_date, form.category].filter(Boolean).join(' ')
       if (head) lines.push(head)
-      const subject = [form.client, form.items].filter(Boolean).join('')
+      let subject = form.client || ''
+      if (details.length <= 1 && items.length) subject += items[0]
       if (subject) lines.push(subject)
-      if (form.license_name) lines.push('执照：' + form.license_name)
-      if (form.legal_person) lines.push('法人：' + form.legal_person)
+      if (details.length > 1) lines.push(`共 ${details.length} 个执照任务`)
+      if (form.phone) lines.push('手机：' + form.phone)
 
-      const unitPrice = this.numberOrNull(form.unit_price)
-      const quantity = form.quantity === undefined || form.quantity === null || form.quantity === ''
-        ? 1
-        : Number(form.quantity)
-      const revenue = this.numberOrNull(form.revenue)
-      const cost = this.numberOrNull(form.cost)
-      const amount = revenue === null && unitPrice !== null ? unitPrice * (quantity || 1) : revenue
-      let profit = this.numberOrNull(form.profit)
-      if (profit === null && amount !== null && cost !== null) {
-        profit = amount - cost
-      }
+      details.forEach((detail, index) => {
+        const extras = []
+        if (detail.biz_status) extras.push('工商：' + detail.biz_status)
+        if (detail.tax_status) extras.push('税务：' + detail.tax_status)
+        if (detail.items) extras.push('业务：' + detail.items)
+        if (!detail.license_name && !extras.length) return
+        const prefix = details.length > 1 ? `执照${index + 1}：` : '执照：'
+        let line = prefix + (detail.license_name || '未填名称')
+        if (extras.length) line += '（' + extras.join(' / ') + '）'
+        lines.push(line)
+      })
 
-      lines.push(`单价：${this.amount(unitPrice)}`)
-      if (quantity && quantity !== 1) {
-        lines.push(`数量：${this.amount(quantity)}`)
-        lines.push(`金额：${this.amount(amount)}`)
+      const totalRevenue = this.sumRevenue(details, 'revenue')
+      const totalCost = this.sumRevenue(details, 'cost')
+      if (details.length === 1) {
+        const single = details[0]
+        const unitPrice = this.numberOrNull(single.unit_price)
+        const quantity = Number(single.quantity || 1)
+        const revenue = this.numberOrNull(single.revenue)
+        const amount = revenue === null && unitPrice !== null ? unitPrice * quantity : revenue
+        lines.push(`单价：${this.amount(unitPrice)}`)
+        if (quantity && quantity !== 1) {
+          lines.push(`数量：${this.amount(quantity)}`)
+          lines.push(`金额：${this.amount(amount)}`)
+        }
       }
-      lines.push(`成本：${this.amount(cost)}`)
+      const profit = totalRevenue === null || totalCost === null ? null : totalRevenue - totalCost
+      lines.push(`收入：${this.amount(totalRevenue)}`)
+      lines.push(`成本：${this.amount(totalCost)}`)
       lines.push(`利润：${this.amount(profit)}`)
       if (form.remark) lines.push(`备注：${form.remark}`)
       return lines.join('\n')
+    },
+    // 明细金额合计：全空返回 null（显示「待定」），否则空值按 0 计
+    sumRevenue(details, key) {
+      const values = details
+        .map(item => this.numberOrNull(item[key]))
+        .filter(value => value !== null)
+      if (!values.length) return null
+      return values.reduce((sum, value) => sum + value, 0)
     },
     numberOrNull(value) {
       if (value === null || value === undefined || value === '') return null
@@ -805,7 +964,12 @@ export default {
   }
 
   .keyword-input {
-    width: 260px;
+    width: 240px;
+  }
+
+  .filter-container .filter-item {
+    margin-right: 8px;
+    margin-bottom: 8px;
   }
 
   .account-tabs {
@@ -856,7 +1020,7 @@ export default {
 
   .chat-body {
     margin-left: 10px;
-    max-width: 560px;
+    max-width: 620px;
   }
 
   .chat-bubble {
@@ -880,14 +1044,8 @@ export default {
     justify-content: space-between;
   }
 
-  .license-name {
-    color: #409eff;
-    cursor: pointer;
-  }
-
-  .license-tip {
-    line-height: 1.9;
-    font-size: 12px;
+  .chat-tags .license-tag {
+    margin-left: 6px;
   }
 
   .form-section-title {
@@ -899,11 +1057,45 @@ export default {
     color: #303133;
     line-height: 18px;
 
+    &:not(:first-child) {
+      margin-top: 18px;
+    }
+
     .optional-tip {
       margin-left: 8px;
       font-weight: 400;
       font-size: 12px;
       color: #909399;
+    }
+
+    .add-detail-btn {
+      float: right;
+      margin-top: -3px;
+    }
+  }
+
+  .detail-block {
+    border: 1px solid #ebeef5;
+    border-radius: 4px;
+    padding: 12px 14px 0;
+    margin-bottom: 14px;
+    background: #fafcff;
+  }
+
+  .detail-block-head {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+
+    .detail-block-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #303133;
+      margin-right: 8px;
+    }
+
+    .detail-block-spacer {
+      flex: 1;
     }
   }
 
@@ -936,5 +1128,11 @@ export default {
     color: #303133;
     width: 100%;
   }
+}
+
+.order-form {
+  max-height: 68vh;
+  overflow-y: auto;
+  padding-right: 8px;
 }
 </style>
