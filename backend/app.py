@@ -330,6 +330,7 @@ def account_message(record):
 
 
 def item_out(row):
+    created = row.get("created_at")
     return {
         "id": row["id"],
         "account_id": row["account_id"],
@@ -347,6 +348,7 @@ def item_out(row):
         "profit": None if row.get("profit") is None else float(row["profit"]),
         "status": row.get("status") or "pending",
         "completed_at": int(row["completed_at"]) if row.get("completed_at") else None,
+        "created_at": int(created.timestamp() * 1000) if created else None,
         "remark": row.get("remark") or "",
         "sort": int(row.get("sort") or 0),
     }

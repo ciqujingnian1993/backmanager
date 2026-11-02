@@ -76,7 +76,7 @@
         <el-option v-for="item in taxStatusOptions" :key="item" :label="item" :value="item" />
       </el-select>
       <el-button class="filter-item" icon="el-icon-refresh" @click="refresh">刷新</el-button>
-      <span class="filter-tip">一个订单按执照拆成多条任务，每条任务单独跟进</span>
+      <span class="filter-tip">一个订单按执照拆成多条任务，每条任务单独跟进；拖延度按创建至今计算，已结案按结案天数定格</span>
     </div>
 
     <el-table
@@ -90,7 +90,7 @@
       <el-table-column label="订单" width="62" align="center">
         <template slot-scope="{ row }">#{{ row.account_id }}</template>
       </el-table-column>
-      <el-table-column label="客户 / 执照" min-width="240" show-overflow-tooltip>
+      <el-table-column label="客户 / 执照" min-width="220" show-overflow-tooltip>
         <template slot-scope="{ row }">
           <div class="cell-main">{{ row.license_name || '未填执照' }}</div>
           <div class="cell-sub">{{ row.client || '—' }}<span v-if="row.items"> · {{ row.items }}</span></div>
@@ -115,7 +115,7 @@
       <el-table-column label="金额" width="80" align="right">
         <template slot-scope="{ row }">{{ amount(row.revenue) }}</template>
       </el-table-column>
-      <el-table-column label="当前进度" width="150" align="center">
+      <el-table-column label="当前进度" width="140" align="center">
         <template slot-scope="{ row }">
           <el-tag v-if="row.last_step" :type="progressTagType(row.last_step, row.last_status)" size="mini">
             {{ row.last_step }}
@@ -123,8 +123,27 @@
           <el-tag v-else type="info" size="mini">未跟进</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="最近更新" width="132">
+      <el-table-column label="创建时间" width="120" align="center">
+        <template slot-scope="{ row }">
+          <span v-if="row.created_at" class="time-text" :title="formatFull(row.created_at)">
+            {{ formatDate(row.created_at) }}
+          </span>
+          <span v-else class="muted-text">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="最近更新" width="138">
         <template slot-scope="{ row }">{{ row.last_timestamp ? formatFull(row.last_timestamp) : '—' }}</template>
+      </el-table-column>
+      <el-table-column label="进度拖延度" width="124" align="center">
+        <template slot-scope="{ row }">
+          <el-tooltip v-if="delayInfo(row)" :content="delayTip(row)" placement="top">
+            <span class="delay-wrap">
+              <span class="delay-chip" :style="delayStyle(row)">{{ delayInfo(row).label }}</span>
+              <span class="delay-days">{{ delayInfo(row).days }}天</span>
+            </span>
+          </el-tooltip>
+          <span v-else class="muted-text">—</span>
+        </template>
       </el-table-column>
       <el-table-column label="操作" width="102" align="center" fixed="right">
         <template slot-scope="{ row }">
@@ -299,6 +318,16 @@ const STATUS_MAP = {
   blocked: '受阻'
 }
 
+// 拖延度分档：≤5 天正常、≤15 天轻度、≤30 天中度、再往上重度
+const DELAY_LEVELS = [
+  { max: 5, label: '正常', color: '#529b2e', bg: '#f0f9eb', border: '#c2e7b0' },
+  { max: 15, label: '轻度拖延', color: '#d46b08', bg: '#fff7e6', border: '#ffd591' },
+  { max: 30, label: '中度拖延', color: '#cf1322', bg: '#fff1f0', border: '#ffa39e' },
+  { max: Infinity, label: '重度拖延', color: '#ffffff', bg: '#cf1322', border: '#cf1322' }
+]
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
 export default {
   name: 'ProgressTab',
   components: { Pagination },
@@ -454,6 +483,35 @@ export default {
       if (status === 'blocked') return 'danger'
       return stepTagType(step)
     },
+    // 拖延度：未结案按「创建 → 现在」算；已结案按「创建 → 结案」定格
+    delayInfo(row) {
+      const created = row.created_at
+      if (!created) return null
+      const done = row.status === 'done'
+      const end = done ? row.completed_at || row.last_timestamp || created : Date.now()
+      const days = Math.max(0, Math.floor((end - created) / DAY_MS))
+      const level = DELAY_LEVELS.find(item => days <= item.max) || DELAY_LEVELS[DELAY_LEVELS.length - 1]
+      return { days, done, label: level.label, color: level.color, bg: level.bg, border: level.border }
+    },
+    delayStyle(row) {
+      const info = this.delayInfo(row)
+      if (!info) return {}
+      return { color: info.color, background: info.bg, borderColor: info.border }
+    },
+    delayTip(row) {
+      const info = this.delayInfo(row)
+      if (!info) return ''
+      const base = `创建于 ${this.formatFull(row.created_at)}`
+      if (info.done) return `${base}，已结案，用时 ${info.days} 天`
+      const last = row.last_timestamp ? `，最近更新 ${this.formatFull(row.last_timestamp)}` : ''
+      return `${base}${last}，已等待 ${info.days} 天（5 天内正常，15 天轻度，30 天中度，超过为重度）`
+    },
+    formatDate(timestamp) {
+      if (!timestamp) return ''
+      const date = new Date(timestamp)
+      const pad = v => String(v).padStart(2, '0')
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    },
     submitProgress() {
       if (!this.form.step) {
         this.$message.warning('请选择或填写阶段')
@@ -575,6 +633,34 @@ export default {
 
   .muted-text {
     color: #c0c4cc;
+  }
+
+  .time-text {
+    color: #606266;
+    font-size: 12px;
+  }
+
+  // 拖延度：色块 + 天数
+  .delay-wrap {
+    display: inline-flex;
+    align-items: center;
+    cursor: default;
+  }
+
+  .delay-chip {
+    padding: 0 6px;
+    font-size: 12px;
+    line-height: 20px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    white-space: nowrap;
+  }
+
+  .delay-days {
+    margin-left: 5px;
+    font-size: 12px;
+    color: #909399;
+    white-space: nowrap;
   }
 
   .cell-main {
