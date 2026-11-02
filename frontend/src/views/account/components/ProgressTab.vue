@@ -163,7 +163,7 @@
     <el-dialog
       :title="dialogTitle"
       :visible.sync="dialogVisible"
-      width="820px"
+      width="900px"
       top="5vh"
     >
       <div v-if="current" class="task-summary">
@@ -229,55 +229,70 @@
         </el-timeline>
       </div>
 
-      <el-divider content-position="left">新增跟进</el-divider>
-      <el-form ref="progressForm" :model="form" label-width="70px">
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="阶段" prop="step">
-              <el-select
-                v-model="form.step"
-                style="width: 100%"
-                filterable
-                allow-create
-                default-first-option
-                placeholder="选择或输入阶段"
-                @change="markStageTouched"
-              >
-                <el-option-group
-                  v-for="group in orderedGroups"
-                  :key="group.key"
-                  :label="group.label + (group.matched ? '（本单适用）' : '')"
-                >
-                  <el-option
-                    v-for="stage in group.stages"
-                    :key="stage"
-                    :label="stage"
-                    :value="stage"
-                  >
-                    <span>{{ stage }}</span>
-                    <span v-if="doneStepSet.has(stage)" class="opt-done">已完成</span>
-                  </el-option>
-                </el-option-group>
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="状态">
-              <el-select v-model="form.status" style="width: 100%">
-                <el-option label="待办" value="pending" />
-                <el-option label="进行中" value="doing" />
-                <el-option label="已完成" value="done" />
-                <el-option label="受阻" value="blocked" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-        </el-row>
+      <el-divider content-position="left">
+        新增跟进
+        <span class="divider-tip">工商 / 税务 / 通用各自独立记录，只填需要推进的那条，可同时提交</span>
+      </el-divider>
+
+      <!-- 三条办理线各自一个进度输入，互不干扰 -->
+      <div class="line-grid">
+        <div
+          v-for="group in orderedGroups"
+          :key="group.key"
+          class="line-card"
+          :class="'k-' + group.key"
+        >
+          <div class="line-head">
+            <span class="line-dot" :style="{ background: groupColor(group.key) }" />
+            <span class="line-name">{{ group.label }}</span>
+            <span v-if="group.matched" class="line-badge">本单适用</span>
+            <span class="line-count">{{ groupDoneCount(group) }}/{{ group.stages.length }}</span>
+          </div>
+          <el-select
+            v-model="form.lines[group.key].step"
+            class="line-select"
+            size="small"
+            clearable
+            filterable
+            allow-create
+            default-first-option
+            :placeholder="'未推进，可留空'"
+          >
+            <el-option
+              v-for="stage in group.stages"
+              :key="stage"
+              :label="shortStage(stage)"
+              :value="stage"
+            >
+              <span>{{ shortStage(stage) }}</span>
+              <span v-if="doneStepSet.has(stage)" class="opt-done">已完成</span>
+            </el-option>
+          </el-select>
+          <div class="line-foot">
+            <el-select v-model="form.lines[group.key].status" size="mini" class="line-status">
+              <el-option label="待办" value="pending" />
+              <el-option label="进行中" value="doing" />
+              <el-option label="已完成" value="done" />
+              <el-option label="受阻" value="blocked" />
+            </el-select>
+            <span
+              v-if="nextStage(group)"
+              class="line-next"
+              :title="'填入：' + nextStage(group)"
+              @click="fillLine(group.key, nextStage(group))"
+            >下一步 {{ shortStage(nextStage(group)) }}</span>
+            <span v-else class="line-next is-done">本线已走完</span>
+          </div>
+        </div>
+      </div>
+
+      <el-form ref="progressForm" :model="form" label-width="46px" class="note-form">
         <el-form-item label="备注">
           <el-input
             v-model="form.note"
             type="textarea"
             :rows="2"
-            placeholder="例如：客户已确认报价，等打款"
+            placeholder="例如：客户已确认报价，等打款（三条线共用同一条备注）"
           />
         </el-form-item>
       </el-form>
@@ -307,7 +322,7 @@ import {
   shortStage,
   stepTagType,
   orderGroups,
-  suggestStage
+  nextStageOf
 } from '@/constants/progress'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
 
@@ -327,6 +342,17 @@ const DELAY_LEVELS = [
 ]
 
 const DAY_MS = 24 * 60 * 60 * 1000
+
+// 三条办理线各自保留一份待提交内容
+const LINE_KEYS = ['common', 'biz', 'tax']
+
+function makeLines() {
+  const lines = {}
+  LINE_KEYS.forEach(key => {
+    lines[key] = { step: '', status: 'doing' }
+  })
+  return lines
+}
 
 export default {
   name: 'ProgressTab',
@@ -355,9 +381,9 @@ export default {
       dialogVisible: false,
       current: null,
       timeline: [],
+      // 三条线各自一条待提交记录：{ step, status }
       form: {
-        step: '',
-        status: 'doing',
+        lines: makeLines(),
         note: ''
       }
     }
@@ -433,8 +459,7 @@ export default {
     },
     openTimeline(row) {
       this.current = row
-      this.form = { step: '', status: 'doing', note: '' }
-      this.__stageTouched = false
+      this.form = { lines: makeLines(), note: '' }
       this.timeline = []
       this.dialogVisible = true
       this.loadTimeline(row.id)
@@ -449,24 +474,21 @@ export default {
         if (data.item && this.current) {
           this.current = Object.assign({}, this.current, data.item)
         }
-        // 还没动过阶段选择时，自动带出这条线上下一个该做的节点
-        if (!this.__stageTouched) this.form.step = this.suggestNextStage()
       } finally {
         this.timelineLoading = false
       }
     },
-    // 按业务项 + 已完成节点推荐下一步，例如解非单会推荐「税务 · 补申报」
-    suggestNextStage() {
-      const done = this.doneStepSet
-      const stage = suggestStage(this.stageGroups, this.current && this.current.items, done)
-      return stage || '已联系'
+    // 某条线自己的下一步；已走完返回空
+    nextStage(group) {
+      return nextStageOf(group, this.doneStepSet)
     },
-    markStageTouched() {
-      this.__stageTouched = true
+    // 填进某条线的阶段输入框（点流程节点或「下一步」提示）
+    fillLine(key, stage) {
+      if (!stage || !this.form.lines[key]) return
+      this.form.lines[key].step = stage
     },
     pickStage(stage) {
-      this.form.step = stage
-      this.__stageTouched = true
+      this.fillLine(groupKeyOfStep(stage), stage)
     },
     groupDoneCount(group) {
       return (group.stages || []).filter(stage => this.doneStepSet.has(stage)).length
@@ -513,23 +535,27 @@ export default {
       return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
     },
     submitProgress() {
-      if (!this.form.step) {
-        this.$message.warning('请选择或填写阶段')
+      const payloads = this.orderedGroups
+        .filter(group => this.form.lines[group.key] && this.form.lines[group.key].step)
+        .map(group => ({
+          item_id: this.current.id,
+          step: this.form.lines[group.key].step,
+          status: this.form.lines[group.key].status || 'doing',
+          note: this.form.note
+        }))
+      if (!payloads.length) {
+        this.$message.warning('请至少在其中一条进度线里选择阶段')
         return
       }
       this.saving = true
-      createProgress({
-        item_id: this.current.id,
-        step: this.form.step,
-        status: this.form.status,
-        note: this.form.note
-      })
+      Promise.all(payloads.map(payload => createProgress(payload)))
         .then(() => {
-          this.$message.success('已添加跟进')
-          this.form.note = ''
+          this.$message.success(payloads.length > 1 ? `已添加 ${payloads.length} 条跟进` : '已添加跟进')
+          this.form = { lines: makeLines(), note: '' }
           this.loadTimeline(this.current.id)
           this.refresh()
         })
+        .catch(() => {})
         .finally(() => {
           this.saving = false
         })
@@ -809,6 +835,114 @@ export default {
     float: right;
     color: #67c23a;
     font-size: 12px;
+  }
+
+  .divider-tip {
+    margin-left: 8px;
+    font-size: 12px;
+    font-weight: 400;
+    color: #909399;
+  }
+
+  // 新增跟进：工商 / 税务 / 通用三列独立
+  .line-grid {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 4px;
+  }
+
+  .line-card {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px 10px;
+    border: 1px solid #ebeef5;
+    border-radius: 6px;
+    background: #fafbfc;
+
+    &.k-biz {
+      border-color: #d9ecff;
+      background: #f5faff;
+    }
+
+    &.k-tax {
+      border-color: #faecd8;
+      background: #fffbf5;
+    }
+  }
+
+  .line-head {
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    color: #606266;
+    margin-bottom: 7px;
+  }
+
+  .line-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-right: 6px;
+    flex: none;
+  }
+
+  .line-name {
+    font-weight: 600;
+  }
+
+  .line-badge {
+    margin-left: 5px;
+    padding: 0 4px;
+    font-size: 11px;
+    line-height: 15px;
+    color: #409eff;
+    background: #ecf5ff;
+    border: 1px solid #b3d8ff;
+    border-radius: 3px;
+  }
+
+  .line-count {
+    margin-left: auto;
+    color: #909399;
+  }
+
+  .line-select {
+    width: 100%;
+  }
+
+  .line-foot {
+    display: flex;
+    align-items: center;
+    margin-top: 7px;
+  }
+
+  .line-status {
+    width: 86px;
+    flex: none;
+  }
+
+  .line-next {
+    margin-left: 8px;
+    font-size: 12px;
+    color: #409eff;
+    cursor: pointer;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+
+    &:hover {
+      text-decoration: underline;
+    }
+
+    &.is-done {
+      color: #67c23a;
+      cursor: default;
+      text-decoration: none;
+    }
+  }
+
+  .note-form {
+    margin-top: 10px;
   }
 
   .group-badge {

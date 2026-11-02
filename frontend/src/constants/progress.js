@@ -104,6 +104,15 @@ export function orderGroups(groups, items) {
     .sort((a, b) => rank(a) - rank(b))
 }
 
+// 某条办理线自己的下一个节点：该组里第一个还没完成的阶段
+export function nextStageOf(group, doneSteps) {
+  const done = doneSteps instanceof Set ? doneSteps : new Set(doneSteps || [])
+  for (const stage of (group && group.stages) || []) {
+    if (!done.has(stage)) return stage
+  }
+  return ''
+}
+
 // 下一个该做的节点：本单适用线里第一个还没完成的阶段；都完成了就返回空
 // 同时涉及工商与税务时（如解非+工商注销），税务动作通常在工商提交前完成，优先推荐税务
 export function suggestStage(groups, items, doneSteps) {
