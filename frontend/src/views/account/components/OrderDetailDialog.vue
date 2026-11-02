@@ -79,6 +79,27 @@
             <span class="detail-value">{{ item.remark || '—' }}</span>
           </div>
         </div>
+
+        <!-- 细分任务进度：工商 / 税务 / 通用三条线各自的完成度与当前节点 -->
+        <div v-if="item.progress && item.progress.lines" class="license-progress">
+          <div class="lp-head">
+            <span class="lp-title">任务进度</span>
+            <span class="lp-meta">
+              <template v-if="item.progress.count">
+                共 {{ item.progress.count }} 条跟进 · 最近 {{ completed(item.progress.last_timestamp) }}
+              </template>
+              <template v-else>还没有跟进记录</template>
+            </span>
+          </div>
+          <div v-for="line in item.progress.lines" :key="line.group" class="lp-line">
+            <span class="lp-name" :class="'g-' + line.group">{{ line.label }}</span>
+            <span class="lp-bar">
+              <span class="lp-fill" :class="'g-' + line.group" :style="{ width: linePercent(line) }" />
+            </span>
+            <span class="lp-count">{{ line.done }}/{{ line.total }}</span>
+            <span class="lp-current" :class="lineClass(line)">{{ lineText(line) }}</span>
+          </div>
+        </div>
       </div>
     </div>
     <div slot="footer">
@@ -89,6 +110,7 @@
 
 <script>
 import { bizStatusType, taxStatusType } from '@/constants/license'
+import { shortStage } from '@/constants/progress'
 
 const STATUS_MAP = {
   pending: '待定',
@@ -138,6 +160,24 @@ export default {
     },
     statusType(status) {
       return status === 'done' ? 'success' : status === 'doing' ? 'warning' : 'info'
+    },
+    // 三条办理线：完成比例、当前节点文案与配色
+    linePercent(line) {
+      if (!line.total) return '0%'
+      return Math.round((line.done / line.total) * 100) + '%'
+    },
+    lineText(line) {
+      if (line.open_step) return shortStage(line.open_step)
+      if (line.done >= line.total && line.total) return '已完成'
+      if (line.done > 0) return '待跟进'
+      return '未开始'
+    },
+    lineClass(line) {
+      const group = 'g-' + line.group
+      if (line.open_step) return [group, line.open_status === 'blocked' ? 'is-blocked' : '']
+      if (line.done >= line.total && line.total) return ['is-done']
+      if (line.done > 0) return [group, 'is-wait']
+      return ['is-idle']
     },
     money(value) {
       if (value === null || value === undefined || value === '') return '待定'
@@ -266,6 +306,88 @@ export default {
     .detail-label {
       width: 104px;
     }
+  }
+
+  // 细分任务进度：三条线进度条 + 当前节点
+  .license-progress {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed #ebeef5;
+  }
+
+  .lp-head {
+    display: flex;
+    align-items: baseline;
+    margin-bottom: 5px;
+  }
+
+  .lp-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #303133;
+  }
+
+  .lp-meta {
+    margin-left: 8px;
+    font-size: 12px;
+    color: #909399;
+  }
+
+  .lp-line {
+    display: flex;
+    align-items: center;
+    height: 22px;
+    font-size: 12px;
+  }
+
+  .lp-name {
+    width: 40px;
+    flex: none;
+    color: #606266;
+
+    &.g-biz { color: #1a7fdd; }
+    &.g-tax { color: #d48806; }
+  }
+
+  .lp-bar {
+    flex: 1;
+    height: 6px;
+    margin: 0 10px;
+    background: #ebeef5;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .lp-fill {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s;
+
+    &.g-biz { background: #409eff; }
+    &.g-tax { background: #e6a23c; }
+    &.g-common { background: #b1b3b8; }
+  }
+
+  .lp-count {
+    width: 42px;
+    flex: none;
+    text-align: right;
+    color: #909399;
+  }
+
+  .lp-current {
+    margin-left: 10px;
+    min-width: 88px;
+    text-align: right;
+    color: #606266;
+
+    &.g-biz { color: #1a7fdd; }
+    &.g-tax { color: #d48806; }
+    &.is-done { color: #529b2e; }
+    &.is-idle { color: #c0c4cc; }
+    &.is-wait { color: #909399; }
+    &.is-blocked { color: #cf1322; }
   }
 }
 </style>

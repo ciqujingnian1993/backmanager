@@ -460,6 +460,56 @@ def item_out(row):
     }
 
 
+def progress_snapshot(cur, item_ids):
+    """每条明细的三条办理线进度（已完成数 / 总数 / 当前未完成节点），供订单详情直接展示。"""
+    ids = [int(i) for i in item_ids if i]
+    if not ids:
+        return {}
+    cur.execute(
+        "SELECT item_id, step, status, timestamp FROM order_progress"
+        " WHERE item_id = ANY(%s) ORDER BY timestamp DESC, id DESC",
+        (ids,),
+    )
+    raw = {}
+    for row in cur.fetchall():
+        raw.setdefault(row["item_id"], []).append(row)
+
+    snapshot = {}
+    for item_id in ids:
+        records = raw.get(item_id, [])
+        done = {r["step"] for r in records if (r["status"] or "") == "done"}
+        open_map = {}
+        for record in records:
+            if (record["status"] or "") == "done":
+                continue
+            open_map.setdefault(stage_group_key(record["step"]), record)
+        lines = []
+        for key in ("biz", "tax", "common"):
+            group = next((g for g in PROGRESS_STAGE_GROUPS if g["key"] == key), None)
+            if group is None:
+                continue
+            stages = group["stages"]
+            hit = open_map.get(key)
+            lines.append({
+                "group": key,
+                "label": group["label"].replace("办理", "").replace("流程", ""),
+                "done": sum(1 for stage in stages if stage in done),
+                "total": len(stages),
+                "open_step": (hit["step"] or "") if hit else "",
+                "open_status": (hit["status"] or "doing") if hit else "",
+                "open_timestamp": int(hit["timestamp"] or 0) if hit else 0,
+            })
+        last = records[0] if records else None
+        snapshot[item_id] = {
+            "lines": lines,
+            "last_step": (last["step"] or "") if last else "",
+            "last_status": (last["status"] or "") if last else "",
+            "last_timestamp": int(last["timestamp"] or 0) if last else 0,
+            "count": len(records),
+        }
+    return snapshot
+
+
 def fetch_details(cur, account_ids):
     """批量取订单明细，避免列表 N+1 查询。"""
     ids = [int(i) for i in account_ids if i]
@@ -472,6 +522,10 @@ def fetch_details(cur, account_ids):
     grouped = {}
     for row in cur.fetchall():
         grouped.setdefault(row["account_id"], []).append(item_out(row))
+    snapshot = progress_snapshot(cur, [item["id"] for items in grouped.values() for item in items])
+    for items in grouped.values():
+        for item in items:
+            item["progress"] = snapshot.get(item["id"], None)
     return grouped
 
 
