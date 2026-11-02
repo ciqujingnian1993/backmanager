@@ -29,13 +29,19 @@ router.beforeEach(async(to, from, next) => {
     } else {
       // determine whether the user has obtained his permission roles through getInfo
       const hasRoles = store.getters.roles && store.getters.roles.length > 0
-      if (hasRoles) {
+      // 已有角色但还没生成过路由（刚登录就是这种情况），仍要生成一次动态路由
+      const hasRoutes = store.state.permission.addRoutes.length > 0
+      if (hasRoles && hasRoutes) {
         next()
       } else {
         try {
-          // get user info
-          // note: roles must be a object array! such as: ['admin'] or ,['developer','editor']
-          const { roles } = await store.dispatch('user/getInfo')
+          // 登录接口已经带回过角色，只有角色缺失（刷新页面后重新取）才请求 user/info
+          let roles = store.getters.roles
+          if (!roles || !roles.length) {
+            // note: roles must be a object array! such as: ['admin'] or ,['developer','editor']
+            const info = await store.dispatch('user/getInfo')
+            roles = info.roles
+          }
 
           // generate accessible routes map based on roles
           const accessRoutes = await store.dispatch('permission/generateRoutes', roles)
@@ -90,7 +96,7 @@ router.beforeEach(async(to, from, next) => {
           sessionStorage.removeItem('session_expired')
           loginUrl += '&expired=1'
         }
-      } catch (e) {}
+      } catch (e) { /* 隐私模式下 sessionStorage 可能不可用，忽略 */ }
       next(loginUrl)
       NProgress.done()
     }

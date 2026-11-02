@@ -45,6 +45,21 @@ const actions = {
         const { data } = response
         commit('SET_TOKEN', data.token)
         setToken(data.token)
+        // 登录接口已把用户信息和菜单一起带回来：这里直接写进 store，
+        // 路由守卫就不用再串行请求 user/info、menu/list，
+        // 每省一次往返就少一个网络 RTT（跨境链路上约 0.2s）
+        const user = data.user || {}
+        if (user.roles && user.roles.length) {
+          commit('SET_USERID', user.id || 0)
+          commit('SET_USERNAME', user.username || '')
+          commit('SET_NAME', user.name || '')
+          commit('SET_AVATAR', user.avatar || '')
+          commit('SET_INTRODUCTION', user.introduction || '')
+          commit('SET_ROLES', user.roles)
+        }
+        if (Array.isArray(data.menus)) {
+          commit('permission/SET_MENUS', data.menus, { root: true })
+        }
         resolve()
       }).catch(error => {
         reject(error)
@@ -62,7 +77,7 @@ const actions = {
           reject('Verification failed, please Login again.')
         }
 
-        const { id, username, roles, name, avatar, introduction } = data
+        const { id, username, roles, name, avatar, introduction, menus } = data
 
         // roles must be a non-empty array
         if (!roles || roles.length <= 0) {
@@ -75,6 +90,10 @@ const actions = {
         commit('SET_NAME', name)
         commit('SET_AVATAR', avatar)
         commit('SET_INTRODUCTION', introduction)
+        // 刷新页面时菜单随用户信息一起回来，不再单独请求 /menu/list
+        if (Array.isArray(menus)) {
+          commit('permission/SET_MENUS', menus, { root: true })
+        }
         resolve(data)
       }).catch(error => {
         reject(error)
@@ -90,6 +109,7 @@ const actions = {
         commit('SET_USERID', 0)
         commit('SET_USERNAME', '')
         commit('SET_ROLES', [])
+        commit('permission/CLEAR_MENUS', null, { root: true })
         removeToken()
         resetRouter()
 
@@ -109,6 +129,7 @@ const actions = {
     return new Promise(resolve => {
       commit('SET_TOKEN', '')
       commit('SET_ROLES', [])
+      commit('permission/CLEAR_MENUS', null, { root: true })
       removeToken()
       resolve()
     })

@@ -20,7 +20,7 @@ import RightPanel from '@/components/RightPanel'
 import { AppMain, Navbar, Settings, Sidebar, TagsView } from './components'
 import ResizeMixin from './mixin/ResizeHandler'
 import { mapState } from 'vuex'
-import { getInfo } from '@/api/user'
+import { ping } from '@/api/user'
 
 export default {
   name: 'Layout',
@@ -50,21 +50,21 @@ export default {
       }
     }
   },
-  methods: {
-    handleClickOutside() {
-      this.$store.dispatch('app/closeSideBar', { withoutAnimation: false })
-    }
-  },
   mounted() {
     // 会话心跳：账号在别的设备登录后，旧 token 会在后端作废，
     // 这里定期探测，失效时由 request 拦截器提示并强制退回登录页
     this.sessionTimer = setInterval(() => {
       if (!this.$store.getters.token) return
-      getInfo(null, true).catch(() => {})
+      ping(null).catch(() => {})
     }, 15000)
   },
   beforeDestroy() {
     if (this.sessionTimer) clearInterval(this.sessionTimer)
+  },
+  methods: {
+    handleClickOutside() {
+      this.$store.dispatch('app/closeSideBar', { withoutAnimation: false })
+    }
   }
 }
 </script>

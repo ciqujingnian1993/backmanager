@@ -435,6 +435,19 @@ def account_message(record):
     return "\n".join(lines)
 
 
+def menu_out(row):
+    """菜单行 → 前端侧边栏配置。登录接口与 /menu/list 共用同一份结构。"""
+    return {
+        "id": row["id"],
+        "path": row["path"],
+        "title": row["title"],
+        "icon": row["icon"] or "",
+        "parent": row["parent"] or "",
+        "sort": int(row["sort"] or 0),
+        "visible": bool(row["visible"]),
+    }
+
+
 def item_out(row):
     created = row.get("created_at")
     return {
@@ -1259,6 +1272,9 @@ class App(BaseHTTPRequestHandler):
     def dispatch(self, method, path, query, body, user):
         if path == "/vue-element-admin/user/login" and method == "POST":
             self.login(body)
+        elif path == "/vue-element-admin/user/ping" and method == "GET":
+            # 会话心跳专用：只校验 token 是否还有效，不查库、不带业务数据
+            self.send_json({"code": 20000, "data": "ok"})
         elif path == "/vue-element-admin/user/info" and method == "GET":
             self.user_info(user)
         elif path == "/vue-element-admin/user/logout" and method == "POST":
@@ -1380,9 +1396,41 @@ class App(BaseHTTPRequestHandler):
                 cur.execute("DELETE FROM sessions WHERE user_id = %s", (row["id"],))
                 cur.execute("INSERT INTO sessions (token, user_id) VALUES (%s, %s)", (token, row["id"]))
             conn.commit()
-        self.send_json({"code": 20000, "data": {"token": token}})
+            # 登录成功直接带回用户信息与菜单，前端不必再串行请求 user/info、menu/list，
+            # 每次往返约一个网络 RTT，省掉这两次能明显缩短登录等待
+            menus = []
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT * FROM menus ORDER BY parent ASC, sort ASC, id ASC")
+                    menus = [menu_out(item) for item in cur.fetchall()]
+            except Exception:
+                menus = []
+        self.send_json({
+            "code": 20000,
+            "data": {
+                "token": token,
+                "user": {
+                    "id": row["id"],
+                    "username": row["username"],
+                    "roles": list(row["roles"] or []),
+                    "name": row["name"] or "",
+                    "avatar": row["avatar"] or "",
+                    "introduction": row["introduction"] or "",
+                },
+                "menus": menus,
+            },
+        })
 
     def user_info(self, user):
+        # 顺带把菜单带回去：刷新页面时前端就不用再单独请求 /menu/list，少一次跨网络往返
+        menus = []
+        try:
+            with connect() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT * FROM menus ORDER BY parent ASC, sort ASC, id ASC")
+                    menus = [menu_out(item) for item in cur.fetchall()]
+        except Exception:
+            menus = []
         self.send_json({
             "code": 20000,
             "data": {
@@ -1392,6 +1440,7 @@ class App(BaseHTTPRequestHandler):
                 "introduction": user["introduction"] or "",
                 "avatar": user["avatar"] or "",
                 "name": user["name"],
+                "menus": menus,
             },
         })
 
@@ -2870,16 +2919,7 @@ class App(BaseHTTPRequestHandler):
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT * FROM menus ORDER BY parent ASC, sort ASC, id ASC")
                 rows = cur.fetchall()
-        items = [{
-            "id": row["id"],
-            "path": row["path"],
-            "title": row["title"],
-            "icon": row["icon"] or "",
-            "parent": row["parent"] or "",
-            "sort": int(row["sort"] or 0),
-            "visible": bool(row["visible"]),
-        } for row in rows]
-        self.send_json({"code": 20000, "data": items})
+        self.send_json({"code": 20000, "data": [menu_out(row) for row in rows]})
 
     def menu_create(self, body, user):
         if not self.is_admin(user):

@@ -17,6 +17,16 @@ export function getInfo(token, silent) {
   })
 }
 
+// 会话心跳：只探测 token 是否被顶下线，返回体极小
+export function ping(token) {
+  return request({
+    url: '/vue-element-admin/user/ping',
+    method: 'get',
+    params: { token },
+    silent: true
+  })
+}
+
 export function logout() {
   return request({
     url: '/vue-element-admin/user/logout',

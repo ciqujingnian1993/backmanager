@@ -133,24 +133,37 @@ export function applyMenuConfig(routes, menus) {
 
 const state = {
   routes: [],
-  addRoutes: []
+  addRoutes: [],
+  // 登录接口带回的菜单配置，避免登录后再请求一次 /menu/list
+  menus: []
 }
 const mutations = {
   SET_ROUTES: (state, routes) => {
     state.addRoutes = routes
     state.routes = constantRoutes.concat(routes)
+  },
+  SET_MENUS: (state, menus) => {
+    state.menus = Array.isArray(menus) ? menus : []
+  },
+  CLEAR_MENUS: (state) => {
+    state.menus = []
+    state.addRoutes = []
+    state.routes = []
   }
 }
 
 const actions = {
-  async generateRoutes({ commit }, roles) {
-    let menus = []
-    try {
-      const { data } = await fetchMenuList()
-      menus = data || []
-    } catch (error) {
-      // 菜单接口不可用时退回前端静态配置，避免整个侧边栏空掉
-      console.warn('fetch menus failed, fallback to static routes', error)
+  async generateRoutes({ commit, state }, roles) {
+    let menus = state.menus && state.menus.length ? state.menus : []
+    if (!menus.length) {
+      try {
+        const { data } = await fetchMenuList()
+        menus = data || []
+        commit('SET_MENUS', menus)
+      } catch (error) {
+        // 菜单接口不可用时退回前端静态配置，避免整个侧边栏空掉
+        console.warn('fetch menus failed, fallback to static routes', error)
+      }
     }
 
     let accessedRoutes

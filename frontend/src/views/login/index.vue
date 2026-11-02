@@ -45,7 +45,7 @@
         </el-form-item>
       </el-tooltip>
 
-      <el-button :loading="loading" type="primary" style="width:100%;margin-bottom:30px;" @click.native.prevent="handleLogin">登 录</el-button>
+      <el-button :loading="loading" type="primary" style="width:100%;margin-bottom:30px;" @click.native.prevent="handleLogin">{{ loading ? '登录中…' : '登 录' }}</el-button>
     </el-form>
   </div>
 </template>
@@ -137,19 +137,18 @@ export default {
       })
     },
     handleLogin() {
+      if (this.loading) return
       this.$refs.loginForm.validate(valid => {
         if (valid) {
           this.loading = true
           this.$store.dispatch('user/login', this.loginForm)
-            .then(() => {
-              this.$router.push({ path: this.redirect || '/', query: this.otherQuery })
-              this.loading = false
-            })
-            .catch(() => {
+            // 等路由真正跳完再收起 loading：否则按钮早就恢复，页面还停在登录页，看起来像没反应
+            .then(() => this.$router.push({ path: this.redirect || '/', query: this.otherQuery }))
+            .catch(() => {})
+            .finally(() => {
               this.loading = false
             })
         } else {
-          console.log('error submit!!')
           return false
         }
       })
