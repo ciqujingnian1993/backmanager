@@ -41,8 +41,46 @@ COST_FIELDS = [
     "remark", "creator",
 ]
 
-# 订单进度可选的阶段，前端下拉与此保持一致
-PROGRESS_STEPS = ["已录入", "已联系", "已报价", "已付款", "办理中", "已交付", "已完成"]
+# 订单进度阶段：通用流转 + 工商/税务两类办事节点。
+# 工商、税务节点均带「工商 · / 税务 ·」前缀，写进 step 字段后自成口径，
+# 时间线一眼能看出这条跟进属于哪条线，也方便按前缀统计。
+PROGRESS_COMMON_STEPS = ["已录入", "已联系", "已报价", "已付款", "办理中", "已交付", "已完成"]
+
+# 工商线：资料收集 → 名称核准 → 网上申报 → 材料签署 → 受理审核 →（补正）→ 公示公告 → 领证 → 刻章/银行/社保 → 办结
+PROGRESS_BIZ_STEPS = [
+    "工商 · 资料收集",
+    "工商 · 名称核准",
+    "工商 · 网上申报",
+    "工商 · 材料签署",
+    "工商 · 受理审核",
+    "工商 · 补正材料",
+    "工商 · 公示公告",
+    "工商 · 领取执照",
+    "工商 · 刻章/银行",
+    "工商 · 办结",
+]
+
+# 税务线：资料收集 → 报到 → 票种核定 →（补申报 → 欠税罚款处理 → 解除非正常）→ 清税申报 → 清税证明 → 办结
+PROGRESS_TAX_STEPS = [
+    "税务 · 资料收集",
+    "税务 · 税务报到",
+    "税务 · 票种核定",
+    "税务 · 补申报",
+    "税务 · 欠税罚款处理",
+    "税务 · 解除非正常",
+    "税务 · 清税申报",
+    "税务 · 清税证明",
+    "税务 · 办结",
+]
+
+PROGRESS_STAGE_GROUPS = [
+    {"key": "common", "label": "通用流程", "hint": "从接单到收款", "stages": PROGRESS_COMMON_STEPS},
+    {"key": "biz", "label": "工商办理", "hint": "执照 / 年报 / 变更 / 注销", "stages": PROGRESS_BIZ_STEPS},
+    {"key": "tax", "label": "税务办理", "hint": "报到 / 补报 / 解非 / 清税", "stages": PROGRESS_TAX_STEPS},
+]
+
+# 扁平列表保留给老接口/老前端，顺序为通用 → 工商 → 税务
+PROGRESS_STEPS = PROGRESS_COMMON_STEPS + PROGRESS_BIZ_STEPS + PROGRESS_TAX_STEPS
 
 # 营业执照状态（工商口径）与税务状态，前端下拉与此保持一致
 BIZ_STATUSES = ["正常", "年报异常", "地址异常", "另册管理", "吊销"]
@@ -1875,7 +1913,12 @@ class App(BaseHTTPRequestHandler):
                                 "category": account_row["category"] or "",
                                 "account_status": account_row["status"] or "pending",
                             })
-        self.send_json({"code": 20000, "data": {"items": items, "steps": PROGRESS_STEPS, "item": item}})
+        self.send_json({"code": 20000, "data": {
+            "items": items,
+            "steps": PROGRESS_STEPS,
+            "stage_groups": PROGRESS_STAGE_GROUPS,
+            "item": item,
+        }})
 
     def progress_overview(self, query):
         """任务总览：一行 = 一条执照明细，带该任务最新进度。"""
@@ -1955,7 +1998,12 @@ class App(BaseHTTPRequestHandler):
                         "progress_count": int(row["progress_count"] or 0),
                     })
                     items.append(record)
-        self.send_json({"code": 20000, "data": {"total": total, "items": items, "steps": PROGRESS_STEPS}})
+        self.send_json({"code": 20000, "data": {
+            "total": total,
+            "items": items,
+            "steps": PROGRESS_STEPS,
+            "stage_groups": PROGRESS_STAGE_GROUPS,
+        }})
 
     def progress_summary(self):
         with connect() as conn:

@@ -28,6 +28,7 @@
               :key="item.step"
               size="mini"
               class="step-tag"
+              :type="stepTagType(item.step)"
             >
               {{ item.step }} {{ item.count }}
             </el-tag>
@@ -114,9 +115,9 @@
       <el-table-column label="金额" width="80" align="right">
         <template slot-scope="{ row }">{{ amount(row.revenue) }}</template>
       </el-table-column>
-      <el-table-column label="当前进度" width="95" align="center">
+      <el-table-column label="当前进度" width="150" align="center">
         <template slot-scope="{ row }">
-          <el-tag v-if="row.last_step" :type="tagType(row.last_status)" size="mini">
+          <el-tag v-if="row.last_step" :type="progressTagType(row.last_step, row.last_status)" size="mini">
             {{ row.last_step }}
           </el-tag>
           <el-tag v-else type="info" size="mini">未跟进</el-tag>
@@ -143,8 +144,8 @@
     <el-dialog
       :title="dialogTitle"
       :visible.sync="dialogVisible"
-      width="700px"
-      top="6vh"
+      width="820px"
+      top="5vh"
     >
       <div v-if="current" class="task-summary">
         <div class="task-cell"><span class="task-label">客户</span>{{ current.client || '—' }}</div>
@@ -153,6 +154,32 @@
         <div class="task-cell"><span class="task-label">工商状态</span>{{ current.biz_status || '—' }}</div>
         <div class="task-cell"><span class="task-label">税务状态</span>{{ current.tax_status || '—' }}</div>
         <div class="task-cell"><span class="task-label">任务金额</span>{{ amount(current.revenue) }}</div>
+      </div>
+
+      <!-- 办理流程轨道：按这一单的业务项展示工商 / 税务节点，点节点可直接填进下方表单 -->
+      <div v-if="current" class="flow-panel">
+        <div class="flow-title">
+          办理流程
+          <span class="flow-tip">点节点可快速填入阶段；绿色为已完成，蓝色为最新进度</span>
+        </div>
+        <div v-for="group in orderedGroups" :key="group.key" class="flow-row">
+          <div class="flow-head">
+            <span class="flow-dot" :style="{ background: groupColor(group.key) }" />
+            <span class="flow-label">{{ group.label }}</span>
+            <span v-if="group.matched" class="flow-badge">本单适用</span>
+            <span class="flow-count">{{ groupDoneCount(group) }}/{{ group.stages.length }}</span>
+          </div>
+          <div class="flow-stages">
+            <span
+              v-for="stage in group.stages"
+              :key="stage"
+              class="flow-chip"
+              :class="{ 'is-done': doneStepSet.has(stage), 'is-current': currentStep === stage }"
+              :title="stage"
+              @click="pickStage(stage)"
+            >{{ shortStage(stage) }}</span>
+          </div>
+        </div>
       </div>
 
       <div v-loading="timelineLoading" class="timeline-wrap">
@@ -169,7 +196,10 @@
           >
             <div class="timeline-card">
               <div class="timeline-head">
-                <span class="timeline-step">{{ item.step }}</span>
+                <span v-if="groupKeyOfStep(item.step) !== 'common'" class="group-badge" :class="'g-' + groupKeyOfStep(item.step)">
+                  {{ groupLabel(item.step) }}
+                </span>
+                <span class="timeline-step">{{ shortStage(item.step) }}</span>
                 <el-tag :type="tagType(item.status)" size="mini">{{ statusText(item.status) }}</el-tag>
                 <span class="timeline-operator">{{ item.operator || '系统' }}</span>
                 <el-button type="text" class="danger-text" @click="removeProgress(item)">删除</el-button>
@@ -192,8 +222,23 @@
                 allow-create
                 default-first-option
                 placeholder="选择或输入阶段"
+                @change="markStageTouched"
               >
-                <el-option v-for="item in steps" :key="item" :label="item" :value="item" />
+                <el-option-group
+                  v-for="group in orderedGroups"
+                  :key="group.key"
+                  :label="group.label + (group.matched ? '（本单适用）' : '')"
+                >
+                  <el-option
+                    v-for="stage in group.stages"
+                    :key="stage"
+                    :label="stage"
+                    :value="stage"
+                  >
+                    <span>{{ stage }}</span>
+                    <span v-if="doneStepSet.has(stage)" class="opt-done">已完成</span>
+                  </el-option>
+                </el-option-group>
               </el-select>
             </el-form-item>
           </el-col>
@@ -236,6 +281,15 @@ import {
   deleteProgress
 } from '@/api/progress'
 import { BIZ_STATUS_OPTIONS, TAX_STATUS_OPTIONS, bizStatusType, taxStatusType } from '@/constants/license'
+import {
+  STAGE_GROUPS,
+  GROUP_META,
+  groupKeyOfStep,
+  shortStage,
+  stepTagType,
+  orderGroups,
+  suggestStage
+} from '@/constants/progress'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const STATUS_MAP = {
@@ -257,6 +311,7 @@ export default {
       total: 0,
       list: [],
       steps: [],
+      stageGroups: STAGE_GROUPS,
       bizStatusOptions: BIZ_STATUS_OPTIONS,
       taxStatusOptions: TAX_STATUS_OPTIONS,
       summary: { tasks: 0, done: 0, covered: 0, missing: 0, by_step: [] },
@@ -283,6 +338,16 @@ export default {
       if (!this.current) return '任务进度'
       const license = this.current.license_name || `订单 #${this.current.account_id}`
       return `任务进度 · ${this.current.client || '未命名客户'} · ${license}`
+    },
+    // 本单涉及工商/税务时，对应分组排到前面并打「本单适用」标记
+    orderedGroups() {
+      return orderGroups(this.stageGroups, this.current && this.current.items)
+    },
+    doneStepSet() {
+      return new Set(this.timeline.filter(item => item.status === 'done').map(item => item.step))
+    },
+    currentStep() {
+      return this.timeline.length ? this.timeline[this.timeline.length - 1].step : ''
     }
   },
   created() {
@@ -293,6 +358,9 @@ export default {
   methods: {
     bizStatusType,
     taxStatusType,
+    groupKeyOfStep,
+    shortStage,
+    stepTagType,
     // 从其它菜单切回本页时（keep-alive 还原）静默刷新
     refreshPage() {
       this.applyRouteQuery()
@@ -321,6 +389,7 @@ export default {
         this.list = data.items || []
         this.total = data.total || 0
         if (data.steps && data.steps.length) this.steps = data.steps
+        if (data.stage_groups && data.stage_groups.length) this.stageGroups = data.stage_groups
       } finally {
         this.loading = false
       }
@@ -335,7 +404,9 @@ export default {
     },
     openTimeline(row) {
       this.current = row
-      this.form = { step: row.last_step || this.steps[1] || '已联系', status: 'doing', note: '' }
+      this.form = { step: '', status: 'doing', note: '' }
+      this.__stageTouched = false
+      this.timeline = []
       this.dialogVisible = true
       this.loadTimeline(row.id)
     },
@@ -345,12 +416,43 @@ export default {
         const { data } = await fetchProgressList(itemId)
         this.timeline = data.items || []
         if (data.steps && data.steps.length) this.steps = data.steps
+        if (data.stage_groups && data.stage_groups.length) this.stageGroups = data.stage_groups
         if (data.item && this.current) {
           this.current = Object.assign({}, this.current, data.item)
         }
+        // 还没动过阶段选择时，自动带出这条线上下一个该做的节点
+        if (!this.__stageTouched) this.form.step = this.suggestNextStage()
       } finally {
         this.timelineLoading = false
       }
+    },
+    // 按业务项 + 已完成节点推荐下一步，例如解非单会推荐「税务 · 补申报」
+    suggestNextStage() {
+      const done = this.doneStepSet
+      const stage = suggestStage(this.stageGroups, this.current && this.current.items, done)
+      return stage || '已联系'
+    },
+    markStageTouched() {
+      this.__stageTouched = true
+    },
+    pickStage(stage) {
+      this.form.step = stage
+      this.__stageTouched = true
+    },
+    groupDoneCount(group) {
+      return (group.stages || []).filter(stage => this.doneStepSet.has(stage)).length
+    },
+    groupColor(key) {
+      return (GROUP_META[key] || GROUP_META.common).color
+    },
+    groupLabel(step) {
+      return (GROUP_META[groupKeyOfStep(step)] || GROUP_META.common).label
+    },
+    // 表格「当前进度」：已完成绿、受阻红，进行中沿用办理线颜色（工商蓝 / 税务橙）
+    progressTagType(step, status) {
+      if (status === 'done') return 'success'
+      if (status === 'blocked') return 'danger'
+      return stepTagType(step)
     },
     submitProgress() {
       if (!this.form.step) {
@@ -506,6 +608,141 @@ export default {
   .task-label {
     color: #909399;
     margin-right: 8px;
+  }
+
+  // 办理流程轨道
+  .flow-panel {
+    border: 1px solid #ebeef5;
+    border-radius: 6px;
+    padding: 10px 12px 4px;
+    margin-bottom: 12px;
+    background: #fff;
+  }
+
+  .flow-title {
+    display: flex;
+    align-items: baseline;
+    font-size: 13px;
+    font-weight: 600;
+    color: #303133;
+    margin-bottom: 8px;
+  }
+
+  .flow-tip {
+    margin-left: 8px;
+    font-weight: 400;
+    font-size: 12px;
+    color: #909399;
+  }
+
+  .flow-row {
+    margin-bottom: 8px;
+  }
+
+  .flow-head {
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    color: #606266;
+    margin-bottom: 5px;
+  }
+
+  .flow-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+
+  .flow-label {
+    font-weight: 600;
+  }
+
+  .flow-badge {
+    margin-left: 6px;
+    padding: 0 5px;
+    line-height: 16px;
+    font-size: 11px;
+    color: #409eff;
+    background: #ecf5ff;
+    border: 1px solid #b3d8ff;
+    border-radius: 3px;
+  }
+
+  .flow-count {
+    margin-left: auto;
+    color: #909399;
+  }
+
+  .flow-stages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .flow-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 9px;
+    font-size: 12px;
+    line-height: 18px;
+    color: #606266;
+    background: #f4f4f5;
+    border: 1px solid #ebeef5;
+    border-radius: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+
+    &:hover {
+      color: #409eff;
+      border-color: #b3d8ff;
+      background: #ecf5ff;
+    }
+
+    &.is-done {
+      color: #529b2e;
+      background: #f0f9eb;
+      border-color: #c2e7b0;
+
+      &::before {
+        content: '✓';
+        margin-right: 3px;
+        font-size: 11px;
+      }
+    }
+
+    &.is-current {
+      color: #fff;
+      background: #409eff;
+      border-color: #409eff;
+      box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.18);
+    }
+  }
+
+  .opt-done {
+    float: right;
+    color: #67c23a;
+    font-size: 12px;
+  }
+
+  .group-badge {
+    padding: 0 5px;
+    margin-right: 6px;
+    font-size: 11px;
+    line-height: 16px;
+    border-radius: 3px;
+
+    &.g-biz {
+      color: #409eff;
+      background: #ecf5ff;
+      border: 1px solid #b3d8ff;
+    }
+
+    &.g-tax {
+      color: #e6a23c;
+      background: #fdf6ec;
+      border: 1px solid #f5dab1;
+    }
   }
 
   .timeline-wrap {
