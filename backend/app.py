@@ -281,6 +281,102 @@ def format_amount(value):
     return ("%.2f" % number).rstrip("0").rstrip(".")
 
 
+# ---------- 财务报表 ----------
+
+MONTH_RE = re.compile(r"^(\d{4})-(\d{1,2})$")
+
+
+def normalize_month(text):
+    """把 2026-10 / 2026/10 / 10 等写法归一到 YYYY-MM，默认当月。"""
+    raw = str(text or "").strip()
+    if raw:
+        head = raw.replace("/", "-").replace(".", "-").replace("年", "-").replace("月", "")
+        parts = [part for part in head.split("-") if part.strip().isdigit()]
+        if len(parts) >= 2 and len(parts[0]) == 4:
+            candidate = "%s-%02d" % (parts[0], int(parts[1]))
+        elif len(parts) == 1 and len(parts[0]) == 4:
+            candidate = parts[0] + "-01"
+        elif len(parts) == 1 and 1 <= int(parts[0]) <= 12:
+            now = datetime.now()
+            candidate = "%04d-%02d" % (now.year, int(parts[0]))
+        else:
+            candidate = ""
+        match = MONTH_RE.match(candidate)
+        if match and 1 <= int(match.group(2)) <= 12:
+            return "%04d-%02d" % (int(match.group(1)), int(match.group(2)))
+    now = datetime.now()
+    return "%04d-%02d" % (now.year, now.month)
+
+
+def month_bounds(month):
+    """YYYY-MM → 本地时区的 (首日 0 点, 次月 1 日 0 点)。"""
+    year, mon = int(month[:4]), int(month[5:7])
+    begin = datetime(year, mon, 1)
+    end = datetime(year + 1, 1, 1) if mon == 12 else datetime(year, mon + 1, 1)
+    return begin, end
+
+
+def prev_month(month):
+    year, mon = int(month[:4]), int(month[5:7])
+    if mon == 1:
+        return "%04d-12" % (year - 1)
+    return "%04d-%02d" % (year, mon - 1)
+
+
+def finance_month_of(biz_date, ts_ms):
+    """一条记录归属的财务月份：业务日期能解析出年份就用它；
+    只有「10/30」这类月日写法时，年份按录入时间补全。"""
+    key = biz_month_key(biz_date)
+    if key:
+        return key
+    stamp = float(ts_ms or 0)
+    if not stamp:
+        return None
+    record_time = datetime.fromtimestamp(stamp / 1000)
+    text = str(biz_date or "").strip()
+    parts = [part for part in re.split(r"[-/.年月日 ]+", text) if part.strip().isdigit()]
+    month_num = 0
+    for part in parts:
+        value = int(part)
+        if 1 <= value <= 12:
+            month_num = value
+            break
+    if month_num:
+        return "%04d-%02d" % (record_time.year, month_num)
+    return "%04d-%02d" % (record_time.year, record_time.month)
+
+
+def finance_day_of(biz_date, ts_ms):
+    """记录落在自然月的哪一天：优先业务日期（2026-10-30 / 10/30），其次录入时间。"""
+    text = str(biz_date or "").strip()
+    head = (
+        text.replace("/", "-").replace(".", "-")
+        .replace("年", "-").replace("月", "-").replace("日", "")
+    )
+    parts = [part for part in head.split("-") if part.strip().isdigit()]
+    if len(parts) >= 3 and len(parts[0]) == 4:
+        return "%02d-%02d" % (int(parts[1]), int(parts[2]))
+    if len(parts) == 2 and int(parts[0]) <= 12:
+        return "%02d-%02d" % (int(parts[0]), int(parts[1]))
+    stamp = float(ts_ms or 0)
+    if stamp:
+        return datetime.fromtimestamp(stamp / 1000).strftime("%m-%d")
+    return None
+
+
+def finance_group_rows(rows, key_getter, amount_getter):
+    """按 key 聚合金额，返回 [{name, amount, count}]，按金额降序。"""
+    grouped = {}
+    for row in rows:
+        name = (key_getter(row) or "").strip() or "未分类"
+        bucket = grouped.setdefault(name, {"name": name, "amount": 0.0, "count": 0})
+        bucket["amount"] += float(amount_getter(row) or 0)
+        bucket["count"] += 1
+    result = list(grouped.values())
+    result.sort(key=lambda item: item["amount"], reverse=True)
+    return result
+
+
 def account_message(record):
     """订单消息文案：一单可挂多个执照，每个执照一行。"""
     details = record.get("details") or []
@@ -783,6 +879,7 @@ def init_db():
                 seed(cur)
             migrate_account_items(cur)
             sync_account_route(cur)
+            ensure_finance_route(cur)
             seed_menus(cur)
             seed_platforms(cur)
             seed_biz_items(cur)
@@ -797,6 +894,7 @@ MENU_SEED = [
     ("/progress/index", "订单进度", "tree", "", 30),
     ("/cost/index", "支出管理", "money", "", 40),
     ("/cost/query", "成本查询", "table", "", 50),
+    ("/finance/report", "财务报表", "chart", "", 60),
     ("/system/user", "用户管理", "user", "/system", 110),
     ("/system/role", "角色管理", "lock", "/system", 120),
     ("/system/menu", "菜单管理", "list", "/system", 130),
@@ -917,6 +1015,23 @@ def sync_account_route(cur):
     for key, role_routes in cur.fetchall():
         items = role_routes if isinstance(role_routes, list) else []
         if any(item.get("path") == "/account" for item in items):
+            continue
+        cur.execute("UPDATE roles SET routes = %s WHERE key = %s", (Json(items + [entry]), key))
+
+
+def ensure_finance_route(cur):
+    """升级迁移：财务报表上线后，把 /finance 条目补进 admin/editor 的角色路由（visitor 不给）。"""
+    try:
+        routes = json.loads(ROUTES_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    entry = next((item for item in routes if item.get("path") == "/finance"), None)
+    if entry is None:
+        return
+    cur.execute("SELECT key, routes FROM roles WHERE key IN ('admin', 'editor')")
+    for key, role_routes in cur.fetchall():
+        items = role_routes if isinstance(role_routes, list) else []
+        if any(item.get("path") == "/finance" for item in items):
             continue
         cur.execute("UPDATE roles SET routes = %s WHERE key = %s", (Json(items + [entry]), key))
 
@@ -1154,6 +1269,8 @@ class App(BaseHTTPRequestHandler):
             self.progress_overview(query)
         elif path == "/vue-element-admin/account/progress/summary" and method == "GET":
             self.progress_summary()
+        elif path == "/vue-element-admin/finance/report" and method == "GET":
+            self.finance_report(query)
         elif path == "/vue-element-admin/account/progress/create" and method == "POST":
             self.progress_create(body, user)
         elif path == "/vue-element-admin/account/progress/delete" and method == "POST":
@@ -2037,6 +2154,183 @@ class App(BaseHTTPRequestHandler):
             "data": {
                 "by_step": by_step, "covered": covered, "tasks": tasks,
                 "orders": orders, "done": done, "missing": missing,
+            },
+        })
+
+    def finance_report(self, query):
+        """月度财务报表：一个自然月的订单收入、直接成本、支出与利润汇总。
+        不传 month 时自动落在最近有数据的月份，避免打开就是空白页。"""
+        requested = str(query.get("month") or "").strip()
+        month = normalize_month(requested) if requested else None
+
+        def pick_month(rows, target):
+            return [row for row in rows if finance_month_of(row.get("biz_date"), row.get("timestamp")) == target]
+
+        def summarize(ord_rows, cost_rows, item_rows):
+            revenue = sum(float(row["revenue"] or 0) for row in ord_rows)
+            direct_cost = sum(float(row["cost"] or 0) for row in ord_rows)
+            opex = sum(float(row["amount"] or 0) for row in cost_rows)
+            done = sum(1 for row in item_rows if (row.get("status") or "") == "done")
+            return {
+                "orders": len(ord_rows),
+                "licenses": len(item_rows),
+                "revenue": round(revenue, 2),
+                "direct_cost": round(direct_cost, 2),
+                "opex": round(opex, 2),
+                "total_cost": round(direct_cost + opex, 2),
+                "net_profit": round(revenue - direct_cost - opex, 2),
+                "done_tasks": done,
+            }
+
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM account_records")
+                all_orders = cur.fetchall()
+                cur.execute("SELECT * FROM cost_records")
+                all_costs = cur.fetchall()
+
+            if month is None:
+                # 优先落在最近有订单的月份，没有订单才退到有支出的月份
+                order_keys = [
+                    key for key in (
+                        finance_month_of(row.get("biz_date"), row.get("timestamp")) for row in all_orders
+                    ) if key
+                ]
+                cost_keys = [
+                    key for key in (
+                        finance_month_of(row.get("biz_date"), row.get("timestamp")) for row in all_costs
+                    ) if key
+                ]
+                month = max(order_keys) if order_keys else (max(cost_keys) if cost_keys else normalize_month(""))
+
+            begin, end = month_bounds(month)
+            orders = pick_month(all_orders, month)
+            costs = pick_month(all_costs, month)
+            order_ids = [row["id"] for row in orders]
+            details = []
+            if order_ids:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT * FROM account_items WHERE account_id = ANY(%s) ORDER BY account_id, sort, id",
+                        (order_ids,),
+                    )
+                    details = cur.fetchall()
+
+            prev_key = prev_month(month)
+            prev_orders = pick_month(all_orders, prev_key)
+            prev_costs = pick_month(all_costs, prev_key)
+            prev_ids = [row["id"] for row in prev_orders]
+            prev_details = []
+            if prev_ids:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT * FROM account_items WHERE account_id = ANY(%s)", (prev_ids,))
+                    prev_details = cur.fetchall()
+
+        summary = summarize(orders, costs, details)
+        prev_summary = summarize(prev_orders, prev_costs, prev_details)
+
+        # 任务平均结案时长（天）：结案时间 - 明细创建时间
+        close_days = []
+        for row in details:
+            if (row.get("status") or "") == "done" and row.get("completed_at") and row.get("created_at"):
+                span = (float(row["completed_at"]) - row["created_at"].timestamp() * 1000) / 86400000
+                close_days.append(max(0.0, span))
+        summary["avg_close_days"] = round(sum(close_days) / len(close_days), 1) if close_days else None
+
+        revenue_by_category = finance_group_rows(orders, lambda r: r.get("category"), lambda r: r["revenue"])
+        revenue_by_platform = finance_group_rows(orders, lambda r: r.get("platform"), lambda r: r["revenue"])
+        cost_by_category = finance_group_rows(costs, lambda r: r.get("category"), lambda r: r["amount"])
+
+        # 业务项排行：明细按原子项拆分统计（一条明细多个业务项时，收入会计入每一项）
+        biz_stats = {}
+        for row in details:
+            for name in split_biz_items(row.get("items")):
+                bucket = biz_stats.setdefault(name, {"name": name, "count": 0, "revenue": 0.0, "cost": 0.0, "profit": 0.0})
+                bucket["count"] += 1
+                bucket["revenue"] += float(row["revenue"] or 0)
+                bucket["cost"] += float(row["cost"] or 0)
+                bucket["profit"] += float(row["profit"] or 0)
+        biz_item_rank = sorted(biz_stats.values(), key=lambda item: item["revenue"], reverse=True)
+        for bucket in biz_item_rank:
+            for key in ("revenue", "cost", "profit"):
+                bucket[key] = round(bucket[key], 2)
+
+        client_stats = {}
+        for row in orders:
+            name = (row.get("client") or "").strip() or "未命名客户"
+            bucket = client_stats.setdefault(name, {"name": name, "orders": 0, "revenue": 0.0})
+            bucket["orders"] += 1
+            bucket["revenue"] += float(row["revenue"] or 0)
+        client_rank = sorted(client_stats.values(), key=lambda item: item["revenue"], reverse=True)
+        for bucket in client_rank:
+            bucket["revenue"] = round(bucket["revenue"], 2)
+
+        # 整月逐日收入 / 支出曲线（缺数据的日期补 0）
+        revenue_by_day = {}
+        opex_by_day = {}
+        for row in orders:
+            key = finance_day_of(row.get("biz_date"), row.get("timestamp"))
+            if key:
+                revenue_by_day[key] = revenue_by_day.get(key, 0) + float(row["revenue"] or 0)
+        for row in costs:
+            key = finance_day_of(row.get("biz_date"), row.get("timestamp"))
+            if key:
+                opex_by_day[key] = opex_by_day.get(key, 0) + float(row["amount"] or 0)
+        daily = []
+        cursor_day = begin
+        while cursor_day < end:
+            key = cursor_day.strftime("%m-%d")
+            daily.append({
+                "day": key,
+                "revenue": round(revenue_by_day.get(key, 0), 2),
+                "opex": round(opex_by_day.get(key, 0), 2),
+            })
+            cursor_day += timedelta(days=1)
+
+        license_count = {}
+        for row in details:
+            license_count[row["account_id"]] = license_count.get(row["account_id"], 0) + 1
+        order_rows = [{
+            "id": row["id"],
+            "biz_date": row.get("biz_date") or "",
+            "client": row.get("client") or "",
+            "category": row.get("category") or "",
+            "platform": row.get("platform") or "",
+            "items": row.get("items") or "",
+            "licenses": license_count.get(row["id"], 0),
+            "revenue": round(float(row["revenue"] or 0), 2),
+            "cost": round(float(row["cost"] or 0), 2),
+            "profit": round(float(row["profit"] or 0), 2),
+            "status": row.get("status") or "pending",
+        } for row in orders]
+        order_rows.sort(key=lambda item: item["id"], reverse=True)
+
+        cost_rows = [{
+            "id": row["id"],
+            "biz_date": row.get("biz_date") or "",
+            "category": row.get("category") or "",
+            "payee": row.get("payee") or "",
+            "amount": round(float(row["amount"] or 0), 2),
+            "method": row.get("method") or "",
+            "related_order": row.get("related_order"),
+            "remark": row.get("remark") or "",
+        } for row in costs]
+        cost_rows.sort(key=lambda item: item["id"])
+
+        self.send_json({
+            "code": 20000,
+            "data": {
+                "month": month,
+                "summary": summary,
+                "prev_summary": prev_summary,
+                "revenue_by_category": revenue_by_category,
+                "revenue_by_platform": revenue_by_platform,
+                "cost_by_category": cost_by_category,
+                "biz_item_rank": biz_item_rank,
+                "client_rank": client_rank,
+                "daily": daily,
+                "orders": order_rows,
+                "costs": cost_rows,
             },
         })
 

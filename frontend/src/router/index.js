@@ -142,6 +142,21 @@ export const asyncRoutes = [
     ]
   },
   {
+    path: '/finance',
+    component: Layout,
+    redirect: '/finance/report',
+    name: 'FinanceMenu',
+    meta: { title: '财务报表', icon: 'chart' },
+    children: [
+      {
+        path: 'report',
+        component: () => import('@/views/finance/report'),
+        name: 'FinanceReport',
+        meta: { title: '财务报表', icon: 'chart' }
+      }
+    ]
+  },
+  {
     path: '/system',
     component: Layout,
     redirect: '/system/user',

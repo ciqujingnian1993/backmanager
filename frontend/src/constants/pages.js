@@ -5,6 +5,7 @@ export const PAGE_OPTIONS = [
   { path: '/progress/index', label: '订单进度' },
   { path: '/cost/index', label: '支出管理' },
   { path: '/cost/query', label: '成本查询' },
+  { path: '/finance/report', label: '财务报表' },
   { path: '/system/user', label: '用户管理' },
   { path: '/system/role', label: '角色管理' },
   { path: '/system/menu', label: '菜单管理' },
@@ -23,5 +24,6 @@ export const ICON_OPTIONS = [
 
 export const PARENT_OPTIONS = [
   { value: '', label: '顶级菜单' },
-  { value: '/system', label: '系统管理' }
+  { value: '/system', label: '系统管理' },
+  { value: '/finance', label: '财务报表' }
 ]
