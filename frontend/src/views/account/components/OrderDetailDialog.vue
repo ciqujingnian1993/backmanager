@@ -386,7 +386,6 @@ export default {
     &.g-tax { color: #d48806; }
     &.is-done { color: #529b2e; }
     &.is-idle { color: #c0c4cc; }
-    &.is-wait { color: #909399; }
     &.is-blocked { color: #cf1322; }
   }
 }

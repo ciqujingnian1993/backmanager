@@ -475,14 +475,19 @@ def progress_snapshot(cur, item_ids):
         raw.setdefault(row["item_id"], []).append(row)
 
     snapshot = {}
+    # 建单时系统自动写的「已录入」不算真实进度，各线取最近记录时要跳过
+    AUTO_STEPS = {"已录入"}
     for item_id in ids:
         records = raw.get(item_id, [])
         done = {r["step"] for r in records if (r["status"] or "") == "done"}
         open_map = {}
+        last_map = {}
         for record in records:
-            if (record["status"] or "") == "done":
-                continue
-            open_map.setdefault(stage_group_key(record["step"]), record)
+            key = stage_group_key(record["step"])
+            if (record["status"] or "") != "done":
+                open_map.setdefault(key, record)
+            if record["step"] not in AUTO_STEPS:
+                last_map.setdefault(key, record)
         lines = []
         for key in ("biz", "tax", "common"):
             group = next((g for g in PROGRESS_STAGE_GROUPS if g["key"] == key), None)
@@ -490,6 +495,7 @@ def progress_snapshot(cur, item_ids):
                 continue
             stages = group["stages"]
             hit = open_map.get(key)
+            recent = last_map.get(key)
             lines.append({
                 "group": key,
                 "label": group["label"].replace("办理", "").replace("流程", ""),
@@ -498,6 +504,8 @@ def progress_snapshot(cur, item_ids):
                 "open_step": (hit["step"] or "") if hit else "",
                 "open_status": (hit["status"] or "doing") if hit else "",
                 "open_timestamp": int(hit["timestamp"] or 0) if hit else 0,
+                "last_step": (recent["step"] or "") if recent else "",
+                "last_status": (recent["status"] or "") if recent else "",
             })
         last = records[0] if records else None
         snapshot[item_id] = {
@@ -2184,29 +2192,21 @@ class App(BaseHTTPRequestHandler):
                     items.append(record)
                     ids.append(record["id"])
 
-                # 三条办理线各自的「未完成」最新节点：已完成的（含系统自动写的「已录入」）不再当作当前进度
-                open_map = {}
-                if ids:
-                    cur.execute(
-                        "SELECT item_id, step, status, timestamp FROM order_progress"
-                        " WHERE item_id = ANY(%s) AND COALESCE(status, '') <> 'done'"
-                        " ORDER BY timestamp DESC, id DESC",
-                        (ids,),
-                    )
-                    for prow in cur.fetchall():
-                        bucket = open_map.setdefault(prow["item_id"], {})
-                        key = stage_group_key(prow["step"])
-                        if key in bucket:
-                            continue
-                        bucket[key] = {
-                            "group": key,
-                            "step": prow["step"],
-                            "status": prow["status"] or "doing",
-                            "timestamp": int(prow["timestamp"] or 0),
-                        }
+                # 三条办理线各自的最新状态：未完成的排前面，已完成的（含系统自动写的「已录入」）不算当前进度
+                snapshot = progress_snapshot(cur, ids)
                 for record in items:
-                    bucket = open_map.get(record["id"], {})
-                    record["open_steps"] = [bucket[k] for k in ("biz", "tax", "common") if k in bucket]
+                    snap = snapshot.get(record["id"]) or {}
+                    lines = snap.get("lines") or []
+                    record["progress_lines"] = lines
+                    record["open_steps"] = [
+                        {
+                            "group": line["group"],
+                            "step": line["open_step"],
+                            "status": line["open_status"],
+                            "timestamp": line["open_timestamp"],
+                        }
+                        for line in lines if line["open_step"]
+                    ]
         self.send_json({"code": 20000, "data": {
             "total": total,
             "items": items,

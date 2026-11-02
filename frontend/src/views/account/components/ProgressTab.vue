@@ -117,17 +117,16 @@
       </el-table-column>
       <el-table-column label="当前进度" width="178" align="center">
         <template slot-scope="{ row }">
-          <div v-if="row.open_steps && row.open_steps.length" class="step-chips">
+          <div v-if="progressChips(row).length" class="step-chips">
             <span
-              v-for="item in row.open_steps"
-              :key="item.group"
+              v-for="chip in progressChips(row)"
+              :key="chip.group"
               class="step-chip"
-              :class="'g-' + item.group"
-              :title="item.step + ' · ' + statusText(item.status)"
-            >{{ shortStage(item.step) }}</span>
+              :class="['g-' + chip.group, 'is-' + chip.state]"
+              :title="chip.title"
+            >{{ chip.text }}</span>
           </div>
-          <span v-else-if="row.status === 'done'" class="muted-text">已完成</span>
-          <span v-else class="muted-text">未跟进</span>
+          <span v-else class="muted-text">{{ row.status === 'done' ? '已完成' : '未跟进' }}</span>
         </template>
       </el-table-column>
       <el-table-column label="创建时间" width="120" align="center">
@@ -329,7 +328,8 @@ import {
   shortStage,
   stepTagType,
   orderGroups,
-  nextStageOf
+  nextStageOf,
+  pickGroupKeys
 } from '@/constants/progress'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
 
@@ -506,7 +506,38 @@ export default {
     groupLabel(step) {
       return (GROUP_META[groupKeyOfStep(step)] || GROUP_META.common).label
     },
-    // 表格「当前进度」：按办理线着色（工商蓝 / 税务橙 / 通用灰），已完成的不再作进度展示
+    // 表格「当前进度」：按办理线着色（工商蓝 / 税务橙 / 通用灰）
+    // 系统默认写的「已录入」不参与展示；已完成的节点用 ✓ 浅色区分，未开始的用虚线圈出
+    progressChips(row) {
+      const lines = row.progress_lines || []
+      const matched = pickGroupKeys(row.items)
+      const chips = []
+      lines.forEach(line => {
+        const isCommon = line.group === 'common'
+        const hasData = !!(line.open_step || line.last_step)
+        // 通用线只在有「未完成」节点时出现，避免每行都挂一个已录入/已完成
+        if (isCommon && !line.open_step) return
+        if (!isCommon && matched.indexOf(line.group) < 0 && !hasData) return
+        if (!hasData) {
+          chips.push({
+            group: line.group,
+            state: 'idle',
+            text: '未开始',
+            title: `${line.label}：还没有跟进记录`
+          })
+          return
+        }
+        const step = line.open_step || line.last_step
+        const status = line.open_step ? line.open_status : 'done'
+        chips.push({
+          group: line.group,
+          state: line.open_step ? (status === 'blocked' ? 'blocked' : 'open') : 'done',
+          text: shortStage(step),
+          title: `${line.label} · ${step}（${this.statusText(status)}）`
+        })
+      })
+      return chips
+    },
     // 拖延度：未结案按「创建 → 现在」算；已结案按「创建 → 结案」定格
     delayInfo(row) {
       const created = row.created_at
@@ -700,6 +731,31 @@ export default {
       color: #606266;
       background: #f4f4f5;
       border-color: #e4e4e7;
+    }
+
+    // 已完成节点：加 ✓ 并稍微压淡，和「进行中」区分开
+    &.is-done {
+      opacity: 0.85;
+
+      &::before {
+        content: '✓';
+        margin-right: 2px;
+        font-size: 10px;
+      }
+    }
+
+    // 受阻：统一用红色提醒
+    &.is-blocked {
+      color: #cf1322;
+      background: #fff1f0;
+      border-color: #ffa39e;
+    }
+
+    // 还没开始：白底虚线，保留办理线颜色但不抢眼
+    &.is-idle {
+      background: #fff;
+      border-style: dashed;
+      opacity: 0.9;
     }
   }
 
