@@ -310,187 +310,179 @@
         <div
           v-for="(detail, index) in form.details"
           :key="index"
-          class="detail-block"
+          class="detail-card"
         >
-          <div class="detail-block-head">
-            <span class="detail-block-title">执照 {{ index + 1 }}</span>
-            <el-tag :type="statusType(detail.status)" size="mini">{{ statusText(detail.status) }}</el-tag>
-            <span class="detail-block-spacer" />
-            <el-button
-              type="text"
-              class="danger-text"
-              :disabled="form.details.length === 1"
-              @click="removeDetail(index)"
-            >
-              删除本执照
-            </el-button>
+          <div class="detail-card-head">
+            <span class="detail-card-index">{{ index + 1 }}</span>
+            <span class="detail-card-title">执照 {{ index + 1 }}</span>
+            <span v-if="detail.license_name" class="detail-card-sub">{{ detail.license_name }}</span>
+            <div class="detail-card-tools">
+              <span class="tool-label">任务状态</span>
+              <el-select v-model="detail.status" size="mini" class="status-select">
+                <el-option label="待定" value="pending" />
+                <el-option label="进行中" value="doing" />
+                <el-option label="已完成" value="done" />
+              </el-select>
+              <el-button
+                type="text"
+                class="danger-text delete-btn"
+                :disabled="form.details.length === 1"
+                @click="removeDetail(index)"
+              >
+                删除
+              </el-button>
+            </div>
           </div>
 
-          <el-row :gutter="16">
-            <el-col :span="12">
-              <el-form-item label="执照名称">
-                <el-input v-model="detail.license_name" placeholder="营业执照上的名称" clearable />
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item
-                label="统一信用编码"
-                :prop="'details.' + index + '.credit_code'"
-                :rules="detailRules.credit_code"
-              >
-                <el-input
-                  v-model="detail.credit_code"
-                  maxlength="18"
-                  placeholder="18 位统一社会信用代码"
-                  clearable
-                  @input="detail.credit_code = (detail.credit_code || '').toUpperCase()"
-                />
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <el-row :gutter="16">
-            <el-col :span="12">
-              <el-form-item label="法人姓名">
-                <el-input v-model="detail.legal_person" placeholder="法定代表人姓名" clearable />
-              </el-form-item>
-            </el-col>
-            <el-col :span="12">
-              <el-form-item
-                label="法人身份证号"
-                :prop="'details.' + index + '.legal_id'"
-                :rules="detailRules.legal_id"
-              >
-                <el-input
-                  v-model="detail.legal_id"
-                  maxlength="18"
-                  placeholder="18 位身份证号"
-                  clearable
-                  @input="detail.legal_id = (detail.legal_id || '').toUpperCase()"
-                />
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <el-row :gutter="16">
-            <el-col :span="8">
-              <el-form-item label="工商状态" label-width="82px">
-                <el-select v-model="detail.biz_status" style="width: 100%" clearable placeholder="可不选">
-                  <el-option v-for="item in bizStatusOptions" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="税务状态" label-width="82px">
-                <el-select v-model="detail.tax_status" style="width: 100%" clearable placeholder="可不选">
-                  <el-option v-for="item in taxStatusOptions" :key="item" :label="item" :value="item" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="任务状态" label-width="82px">
-                <el-select v-model="detail.status" style="width: 100%">
-                  <el-option label="待定" value="pending" />
-                  <el-option label="进行中" value="doing" />
-                  <el-option label="已完成" value="done" />
-                </el-select>
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <el-row :gutter="16">
-            <el-col :span="24">
-              <el-form-item label="业务项">
-                <el-select
-                  :value="detail.item_list"
-                  multiple
-                  filterable
-                  allow-create
-                  default-first-option
-                  popper-class="biz-item-dropdown"
-                  style="width: 100%"
-                  placeholder="从业务项配置里多选，也可直接输入新项"
-                  @change="value => handleItemsChange(detail, value)"
+          <div class="detail-card-body">
+            <el-row :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="执照名称">
+                  <el-input v-model="detail.license_name" placeholder="营业执照上的名称" clearable />
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item
+                  label="统一信用编码"
+                  :prop="'details.' + index + '.credit_code'"
+                  :rules="detailRules.credit_code"
                 >
-                  <el-option
-                    v-for="item in bizItemOptions"
-                    :key="item.name"
-                    :label="item.name"
-                    :value="item.name"
+                  <el-input
+                    v-model="detail.credit_code"
+                    maxlength="18"
+                    placeholder="18 位统一社会信用代码"
+                    clearable
+                    @input="detail.credit_code = (detail.credit_code || '').toUpperCase()"
+                  />
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <el-row :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="法人姓名">
+                  <el-input v-model="detail.legal_person" placeholder="法定代表人姓名" clearable />
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item
+                  label="法人身份证号"
+                  :prop="'details.' + index + '.legal_id'"
+                  :rules="detailRules.legal_id"
+                >
+                  <el-input
+                    v-model="detail.legal_id"
+                    maxlength="18"
+                    placeholder="18 位身份证号"
+                    clearable
+                    @input="detail.legal_id = (detail.legal_id || '').toUpperCase()"
+                  />
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <el-row :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="工商状态">
+                  <el-select v-model="detail.biz_status" style="width: 100%" clearable placeholder="可不选">
+                    <el-option v-for="item in bizStatusOptions" :key="item" :label="item" :value="item" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="税务状态">
+                  <el-select v-model="detail.tax_status" style="width: 100%" clearable placeholder="可不选">
+                    <el-option v-for="item in taxStatusOptions" :key="item" :label="item" :value="item" />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <el-row :gutter="16">
+              <el-col :span="24">
+                <el-form-item label="业务项">
+                  <el-select
+                    :value="detail.item_list"
+                    multiple
+                    filterable
+                    allow-create
+                    default-first-option
+                    popper-class="biz-item-dropdown"
+                    style="width: 100%"
+                    placeholder="从业务项配置里多选，也可直接输入新项"
+                    @change="value => handleItemsChange(detail, value)"
                   >
-                    <span class="option-name">{{ item.name }}</span>
-                    <span v-if="item.unit_price" class="option-price">¥{{ formatMoney(item.unit_price) }}</span>
-                  </el-option>
-                </el-select>
-                <div v-if="detail.item_list && detail.item_list.length > 1" class="items-preview">
-                  组合后：{{ joinItems(detail.item_list) }}
+                    <el-option
+                      v-for="item in bizItemOptions"
+                      :key="item.name"
+                      :label="item.name"
+                      :value="item.name"
+                    >
+                      <span class="option-name">{{ item.name }}</span>
+                      <span v-if="item.unit_price" class="option-price">¥{{ formatMoney(item.unit_price) }}</span>
+                    </el-option>
+                  </el-select>
+                  <div v-if="detail.item_list && detail.item_list.length > 1" class="items-preview">
+                    组合后：{{ joinItems(detail.item_list) }}
+                  </div>
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <div class="money-row">
+              <span class="money-row-label">费用</span>
+              <div class="money-panel">
+                <div class="money-cell">
+                  <span class="money-label">单价</span>
+                  <el-input-number
+                    v-model="detail.unit_price"
+                    :controls="false"
+                    :min="0"
+                    :precision="2"
+                    placeholder="0.00"
+                  />
                 </div>
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <el-row :gutter="16">
-            <el-col :span="8">
-              <el-form-item label="单价" label-width="62px">
-                <el-input-number
-                  v-model="detail.unit_price"
-                  style="width: 100%"
-                  :min="0"
-                  :precision="2"
-                  :step="50"
-                  controls-position="right"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="数量" label-width="62px">
-                <el-input-number
-                  v-model="detail.quantity"
-                  style="width: 100%"
-                  :min="1"
-                  :precision="0"
-                  controls-position="right"
-                />
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <el-row :gutter="16">
-            <el-col :span="8">
-              <el-form-item label="收入" label-width="62px">
-                <el-input-number
-                  v-model="detail.revenue"
-                  style="width: 100%"
-                  :min="0"
-                  :precision="2"
-                  :step="50"
-                  controls-position="right"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="成本" label-width="62px">
-                <el-input-number
-                  v-model="detail.cost"
-                  style="width: 100%"
-                  :min="0"
-                  :precision="2"
-                  :step="50"
-                  controls-position="right"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :span="8">
-              <el-form-item label="利润" label-width="62px">
-                <el-input-number
-                  v-model="detail.profit"
-                  style="width: 100%"
-                  :min="0"
-                  :precision="2"
-                  :step="50"
-                  controls-position="right"
-                />
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <el-form-item label="本执照备注">
-            <el-input v-model="detail.remark" placeholder="这个执照的特殊说明，可不填" clearable />
-          </el-form-item>
+                <div class="money-cell">
+                  <span class="money-label">数量</span>
+                  <el-input-number
+                    v-model="detail.quantity"
+                    :controls="false"
+                    :min="1"
+                    :precision="0"
+                  />
+                </div>
+                <div class="money-cell">
+                  <span class="money-label">收入</span>
+                  <el-input-number
+                    v-model="detail.revenue"
+                    :controls="false"
+                    :min="0"
+                    :precision="2"
+                    placeholder="0.00"
+                  />
+                </div>
+                <div class="money-cell">
+                  <span class="money-label">成本</span>
+                  <el-input-number
+                    v-model="detail.cost"
+                    :controls="false"
+                    :min="0"
+                    :precision="2"
+                    placeholder="0.00"
+                  />
+                </div>
+                <div class="money-cell money-cell-profit">
+                  <span class="money-label">利润</span>
+                  <el-input-number
+                    v-model="detail.profit"
+                    :controls="false"
+                    :min="0"
+                    :precision="2"
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+            </div>
+            <el-form-item label="备注">
+              <el-input v-model="detail.remark" placeholder="这个执照的特殊说明，可不填" clearable />
+            </el-form-item>
+          </div>
         </div>
 
         <el-form-item label="消息预览">
@@ -644,7 +636,8 @@ export default {
     },
     handleTabClick() {
       if (this.$route.query.tab !== this.activeView) {
-        this.$router.replace({ query: { ...this.$route.query, tab: this.activeView } })
+        const query = { ...this.$route.query, tab: this.activeView }
+        this.$router.replace({ query })
       }
     },
     async loadPlatforms() {
@@ -1122,53 +1115,180 @@ export default {
   }
 
   .form-section-title {
+    display: flex;
+    align-items: center;
     margin: 4px 0 14px;
     padding-left: 8px;
     border-left: 3px solid #409eff;
     font-size: 13px;
     font-weight: 600;
     color: #303133;
-    line-height: 18px;
+    line-height: 20px;
 
     &:not(:first-child) {
       margin-top: 18px;
     }
 
     .optional-tip {
+      flex: 1;
+      min-width: 0;
       margin-left: 8px;
       font-weight: 400;
       font-size: 12px;
       color: #909399;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
     }
 
     .add-detail-btn {
-      float: right;
-      margin-top: -3px;
+      flex: none;
+      margin-left: 12px;
     }
   }
 
-  .detail-block {
-    border: 1px solid #ebeef5;
-    border-radius: 4px;
-    padding: 12px 14px 0;
+  .detail-card {
     margin-bottom: 14px;
-    background: #fafcff;
+    border: 1px solid #e6ebf2;
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+    transition: border-color 0.2s, box-shadow 0.2s;
+
+    &:hover {
+      border-color: #c6dcf5;
+      box-shadow: 0 2px 12px rgba(64, 158, 255, 0.1);
+    }
   }
 
-  .detail-block-head {
+  .detail-card-head {
     display: flex;
     align-items: center;
-    margin-bottom: 10px;
+    height: 40px;
+    padding: 0 14px;
+    background: linear-gradient(180deg, #f7faff 0%, #f1f5fb 100%);
+    border-bottom: 1px solid #e9eff7;
 
-    .detail-block-title {
+    .detail-card-index {
+      flex: none;
+      width: 20px;
+      height: 20px;
+      margin-right: 8px;
+      border-radius: 50%;
+      background: #409eff;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 20px;
+      text-align: center;
+    }
+
+    .detail-card-title {
+      flex: none;
       font-size: 13px;
       font-weight: 600;
       color: #303133;
-      margin-right: 8px;
     }
 
-    .detail-block-spacer {
+    .detail-card-sub {
+      max-width: 300px;
+      margin-left: 8px;
+      padding-left: 8px;
+      border-left: 1px solid #dcdfe6;
+      font-size: 12px;
+      color: #909399;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .detail-card-tools {
+      display: flex;
+      align-items: center;
+      margin-left: auto;
+
+      .tool-label {
+        margin-right: 6px;
+        font-size: 12px;
+        color: #909399;
+      }
+
+      .status-select {
+        width: 96px;
+      }
+
+      .delete-btn {
+        margin-left: 12px;
+        padding: 0;
+        font-size: 12px;
+      }
+    }
+  }
+
+  .detail-card-body {
+    padding: 16px 16px 2px;
+
+    /* 留够空间给校验错误提示（绝对定位在输入框下方 16px） */
+    .el-form-item {
+      margin-bottom: 20px;
+    }
+  }
+
+  .money-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 20px;
+
+    .money-row-label {
+      flex: none;
+      width: 104px;
+      padding-right: 12px;
+      box-sizing: border-box;
+      text-align: right;
+      font-size: 14px;
+      color: #606266;
+    }
+
+    .money-panel {
+      display: flex;
       flex: 1;
+      min-width: 0;
+      padding: 10px 12px 12px;
+      border: 1px solid #eef2f7;
+      border-radius: 6px;
+      background: #f8fafd;
+    }
+
+    .money-cell {
+      flex: 1;
+      min-width: 0;
+
+      & + .money-cell {
+        margin-left: 12px;
+      }
+
+      .money-label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 12px;
+        line-height: 16px;
+        color: #909399;
+      }
+
+      .el-input-number {
+        width: 100%;
+      }
+
+      /* 去掉 controls 后 element 仍留了给加减按钮的内边距，这里改回正常留白并左对齐 */
+      ::v-deep .el-input__inner {
+        padding: 0 10px;
+        text-align: left;
+      }
+    }
+
+    .money-cell-profit .money-label {
+      color: #409eff;
+      font-weight: 600;
     }
   }
 
