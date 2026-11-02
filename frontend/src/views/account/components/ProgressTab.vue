@@ -115,12 +115,19 @@
       <el-table-column label="金额" width="80" align="right">
         <template slot-scope="{ row }">{{ amount(row.revenue) }}</template>
       </el-table-column>
-      <el-table-column label="当前进度" width="140" align="center">
+      <el-table-column label="当前进度" width="178" align="center">
         <template slot-scope="{ row }">
-          <el-tag v-if="row.last_step" :type="progressTagType(row.last_step, row.last_status)" size="mini">
-            {{ row.last_step }}
-          </el-tag>
-          <el-tag v-else type="info" size="mini">未跟进</el-tag>
+          <div v-if="row.open_steps && row.open_steps.length" class="step-chips">
+            <span
+              v-for="item in row.open_steps"
+              :key="item.group"
+              class="step-chip"
+              :class="'g-' + item.group"
+              :title="item.step + ' · ' + statusText(item.status)"
+            >{{ shortStage(item.step) }}</span>
+          </div>
+          <span v-else-if="row.status === 'done'" class="muted-text">已完成</span>
+          <span v-else class="muted-text">未跟进</span>
         </template>
       </el-table-column>
       <el-table-column label="创建时间" width="120" align="center">
@@ -499,12 +506,7 @@ export default {
     groupLabel(step) {
       return (GROUP_META[groupKeyOfStep(step)] || GROUP_META.common).label
     },
-    // 表格「当前进度」：已完成绿、受阻红，进行中沿用办理线颜色（工商蓝 / 税务橙）
-    progressTagType(step, status) {
-      if (status === 'done') return 'success'
-      if (status === 'blocked') return 'danger'
-      return stepTagType(step)
-    },
+    // 表格「当前进度」：按办理线着色（工商蓝 / 税务橙 / 通用灰），已完成的不再作进度展示
     // 拖延度：未结案按「创建 → 现在」算；已结案按「创建 → 结案」定格
     delayInfo(row) {
       const created = row.created_at
@@ -664,6 +666,41 @@ export default {
   .time-text {
     color: #606266;
     font-size: 12px;
+  }
+
+  // 当前进度：三条线各一个小标签，按办理线着色
+  .step-chips {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px;
+  }
+
+  .step-chip {
+    padding: 0 6px;
+    font-size: 11px;
+    line-height: 18px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    white-space: nowrap;
+
+    &.g-biz {
+      color: #1a7fdd;
+      background: #ecf5ff;
+      border-color: #b3d8ff;
+    }
+
+    &.g-tax {
+      color: #d48806;
+      background: #fdf6ec;
+      border-color: #f5dab1;
+    }
+
+    &.g-common {
+      color: #606266;
+      background: #f4f4f5;
+      border-color: #e4e4e7;
+    }
   }
 
   // 拖延度：色块 + 天数

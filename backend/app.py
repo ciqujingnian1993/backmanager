@@ -82,6 +82,16 @@ PROGRESS_STAGE_GROUPS = [
 # 扁平列表保留给老接口/老前端，顺序为通用 → 工商 → 税务
 PROGRESS_STEPS = PROGRESS_COMMON_STEPS + PROGRESS_BIZ_STEPS + PROGRESS_TAX_STEPS
 
+
+def stage_group_key(step):
+    """「工商 · 受理审核」→ biz；老数据（已录入/已联系…）→ common。"""
+    head = str(step or "").split("·")[0].strip()
+    if head == "工商":
+        return "biz"
+    if head == "税务":
+        return "tax"
+    return "common"
+
 # 营业执照状态（工商口径）与税务状态，前端下拉与此保持一致
 BIZ_STATUSES = ["正常", "年报异常", "地址异常", "另册管理", "吊销"]
 TAX_STATUSES = ["税务正常", "无税务", "税务非正常"]
@@ -2100,6 +2110,7 @@ class App(BaseHTTPRequestHandler):
                     params + [limit, (page - 1) * limit],
                 )
                 items = []
+                ids = []
                 for row in cur.fetchall():
                     record = item_out(row)
                     record.update({
@@ -2117,6 +2128,31 @@ class App(BaseHTTPRequestHandler):
                         "progress_count": int(row["progress_count"] or 0),
                     })
                     items.append(record)
+                    ids.append(record["id"])
+
+                # 三条办理线各自的「未完成」最新节点：已完成的（含系统自动写的「已录入」）不再当作当前进度
+                open_map = {}
+                if ids:
+                    cur.execute(
+                        "SELECT item_id, step, status, timestamp FROM order_progress"
+                        " WHERE item_id = ANY(%s) AND COALESCE(status, '') <> 'done'"
+                        " ORDER BY timestamp DESC, id DESC",
+                        (ids,),
+                    )
+                    for prow in cur.fetchall():
+                        bucket = open_map.setdefault(prow["item_id"], {})
+                        key = stage_group_key(prow["step"])
+                        if key in bucket:
+                            continue
+                        bucket[key] = {
+                            "group": key,
+                            "step": prow["step"],
+                            "status": prow["status"] or "doing",
+                            "timestamp": int(prow["timestamp"] or 0),
+                        }
+                for record in items:
+                    bucket = open_map.get(record["id"], {})
+                    record["open_steps"] = [bucket[k] for k in ("biz", "tax", "common") if k in bucket]
         self.send_json({"code": 20000, "data": {
             "total": total,
             "items": items,
