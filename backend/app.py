@@ -717,6 +717,18 @@ def init_db():
             created_at timestamptz NOT NULL DEFAULT now()
         )
         """,
+        # 业务项字典：订单里的业务项从这里多选组合，单价随配置带出
+        """
+        CREATE TABLE IF NOT EXISTS biz_items (
+            id serial PRIMARY KEY,
+            name text UNIQUE NOT NULL,
+            unit_price numeric DEFAULT 0,
+            remark text DEFAULT '',
+            sort integer NOT NULL DEFAULT 0,
+            active boolean NOT NULL DEFAULT true,
+            created_at timestamptz NOT NULL DEFAULT now()
+        )
+        """,
     ]
     with connect() as conn:
         with conn.cursor() as cur:
@@ -729,6 +741,7 @@ def init_db():
             sync_account_route(cur)
             seed_menus(cur)
             seed_platforms(cur)
+            seed_biz_items(cur)
         conn.commit()
 
 
@@ -744,6 +757,7 @@ MENU_SEED = [
     ("/system/role", "角色管理", "lock", "/system", 120),
     ("/system/menu", "菜单管理", "list", "/system", 130),
     ("/system/platform", "平台管理", "shopping", "/system", 140),
+    ("/system/bizitem", "业务项配置", "star", "/system", 150),
 ]
 
 # 旧菜单路径 → 新菜单路径（升级时把存量行改名，避免 ON CONFLICT 撞旧路径）
@@ -770,8 +784,58 @@ def seed_platforms(cur):
         )
 
 
+# 业务项字典的预置项。业务项是「原子项」，订单里多选后按 A+B 拼接，
+# 所以这里只放单项，不放「解非+注销」这类组合。
+BIZ_ITEM_SEED = [
+    "工商注销",
+    "税务注销",
+    "解非",
+    "税务非正常解除",
+    "另册管理",
+    "虚假地址",
+    "挂靠地址明年注销",
+    "年报补报",
+    "年报异常解除",
+    "地址异常解除",
+    "有税",
+    "无税",
+    "变更登记",
+]
+
+ITEM_SPLIT_RE = re.compile(r"[+＋、,，/／|]+")
+
+
+def split_biz_items(text):
+    """把「解非+工商注销」拆成原子业务项，供下拉选择与使用次数统计共用。"""
+    parts = []
+    for piece in ITEM_SPLIT_RE.split(text or ""):
+        name = piece.strip()
+        if name and name not in parts:
+            parts.append(name)
+    return parts
+
+
+def seed_biz_items(cur):
+    # 预置项 + 历史订单里已经用过的业务项，一起导入字典，升级后立刻可复用
+    names = list(BIZ_ITEM_SEED)
+    cur.execute("SELECT DISTINCT items FROM account_items WHERE COALESCE(items, '') <> ''")
+    for row in cur.fetchall():
+        for name in split_biz_items(row["items"] if isinstance(row, dict) else row[0]):
+            if name not in names:
+                names.append(name)
+    for index, name in enumerate(names):
+        cur.execute(
+            """
+            INSERT INTO biz_items (name, unit_price, remark, sort)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (name) DO NOTHING
+            """,
+            (name, 0, "预置", (index + 1) * 10),
+        )
+
+
 def seed_menus(cur):
-    # 先把旧路径改名（如平台管理并入系统管理），再补插新增菜单
+
     for old_path, (path, title, icon, parent, sort) in MENU_RENAME.items():
         cur.execute(
             """
@@ -1014,6 +1078,14 @@ class App(BaseHTTPRequestHandler):
             self.platform_update(body, user)
         elif path == "/vue-element-admin/platform/delete" and method == "POST":
             self.platform_delete(body, user)
+        elif path == "/vue-element-admin/bizitem/list" and method == "GET":
+            self.bizitem_list(query)
+        elif path == "/vue-element-admin/bizitem/create" and method == "POST":
+            self.bizitem_create(body, user)
+        elif path == "/vue-element-admin/bizitem/update" and method == "POST":
+            self.bizitem_update(body, user)
+        elif path == "/vue-element-admin/bizitem/delete" and method == "POST":
+            self.bizitem_delete(body, user)
         elif path == "/vue-element-admin/search/user" and method == "GET":
             self.search_user(query)
         elif path == "/vue-element-admin/transaction/list" and method == "GET":
@@ -2536,6 +2608,171 @@ class App(BaseHTTPRequestHandler):
                     self.send_json({"code": 50000, "message": "该平台已有订单使用，无法删除，可改为停用名称或在订单里调整"})
                     return
                 cur.execute("DELETE FROM platforms WHERE id = %s", (platform_id,))
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    # ---------------- 业务项配置 ----------------
+    # 订单里的「业务项」是多选组合（A+B），字典里只维护原子项与默认单价。
+
+    def biz_item_usage(self, cur):
+        """统计每个业务项被多少条执照明细用到：按 + 拆开再数，避免「解非」误命中「税务非正常解除」。"""
+        cur.execute("SELECT items FROM account_items WHERE COALESCE(items, '') <> ''")
+        usage = {}
+        for row in cur.fetchall():
+            text = row["items"] if isinstance(row, dict) else row[0]
+            for name in split_biz_items(text):
+                usage[name] = usage.get(name, 0) + 1
+        return usage
+
+    def bizitem_list(self, query=None):
+        keyword = (query or {}).get("keyword", "").strip()
+        where_sql = ""
+        params = []
+        if keyword:
+            where_sql = " WHERE name ILIKE %s OR remark ILIKE %s"
+            like = "%" + keyword + "%"
+            params = [like, like]
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM biz_items" + where_sql + " ORDER BY sort ASC, id ASC",
+                    params,
+                )
+                rows = cur.fetchall()
+                usage = self.biz_item_usage(cur)
+        items = [{
+            "id": row["id"],
+            "name": row["name"],
+            "unit_price": float(row["unit_price"] or 0),
+            "remark": row["remark"] or "",
+            "sort": int(row["sort"] or 0),
+            "active": bool(row["active"]),
+            "used_count": int(usage.get(row["name"], 0)),
+        } for row in rows]
+        self.send_json({"code": 20000, "data": items})
+
+    def bizitem_create(self, body, user):
+        if not self.is_admin(user):
+            self.deny("仅管理员可新增业务项")
+            return
+        name = (body.get("name") or "").strip()
+        if not name:
+            self.send_json({"code": 50000, "message": "业务项名称不能为空"})
+            return
+        if ITEM_SPLIT_RE.search(name):
+            self.send_json({"code": 50000, "message": "业务项是单个项目，不要带 + / 、等分隔符"})
+            return
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM biz_items WHERE name = %s", (name,))
+                if cur.fetchone():
+                    self.send_json({"code": 50000, "message": "该业务项已存在"})
+                    return
+                cur.execute(
+                    """
+                    INSERT INTO biz_items (name, unit_price, remark, sort, active)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        name, float(body.get("unit_price") or 0), body.get("remark") or "",
+                        int(body.get("sort") or 0), bool(body.get("active", True)),
+                    ),
+                )
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    def bizitem_update(self, body, user):
+        item_id = int(body.get("id") or 0)
+        name = (body.get("name") or "").strip()
+        # 只改启用状态时（列表里的开关）其余字段不动
+        only_toggle = bool(body.get("only_toggle"))
+        if not self.is_admin(user):
+            self.deny("仅管理员可修改业务项")
+            return
+        if not item_id:
+            self.send_json({"code": 50000, "message": "业务项信息不完整"})
+            return
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM biz_items WHERE id = %s", (item_id,))
+                current = cur.fetchone()
+                if current is None:
+                    self.send_json({"code": 50000, "message": "业务项不存在"})
+                    return
+                if only_toggle:
+                    cur.execute(
+                        "UPDATE biz_items SET active = %s WHERE id = %s",
+                        (bool(body.get("active", True)), item_id),
+                    )
+                    conn.commit()
+                    self.send_json({"code": 20000, "data": {"status": "success"}})
+                    return
+                if not name:
+                    self.send_json({"code": 50000, "message": "业务项名称不能为空"})
+                    return
+                if ITEM_SPLIT_RE.search(name):
+                    self.send_json({"code": 50000, "message": "业务项是单个项目，不要带 + / 、等分隔符"})
+                    return
+                cur.execute("SELECT 1 FROM biz_items WHERE name = %s AND id <> %s", (name, item_id))
+                if cur.fetchone():
+                    self.send_json({"code": 50000, "message": "该业务项已存在"})
+                    return
+                cur.execute(
+                    """
+                    UPDATE biz_items SET name = %s, unit_price = %s, remark = %s, sort = %s, active = %s
+                     WHERE id = %s
+                    """,
+                    (
+                        name, float(body.get("unit_price") or 0), body.get("remark") or "",
+                        int(body.get("sort") or 0), bool(body.get("active", True)), item_id,
+                    ),
+                )
+                old_name = current["name"]
+                if old_name != name:
+                    # 改名时同步历史明细与订单级业务项，否则老订单里会留下改名前的老名字
+                    cur.execute(
+                        "SELECT id, items FROM account_items WHERE COALESCE(items, '') LIKE %s",
+                        ("%" + old_name + "%",),
+                    )
+                    for row in cur.fetchall():
+                        parts = [name if part == old_name else part for part in split_biz_items(row["items"])]
+                        cur.execute(
+                            "UPDATE account_items SET items = %s WHERE id = %s",
+                            ("+".join(parts), row["id"]),
+                        )
+                    cur.execute(
+                        "SELECT id, items FROM account_records WHERE COALESCE(items, '') LIKE %s",
+                        ("%" + old_name + "%",),
+                    )
+                    for row in cur.fetchall():
+                        parts = [name if part == old_name else part for part in split_biz_items(row["items"])]
+                        cur.execute(
+                            "UPDATE account_records SET items = %s WHERE id = %s",
+                            ("+".join(parts), row["id"]),
+                        )
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    def bizitem_delete(self, body, user):
+        if not self.is_admin(user):
+            self.deny("仅管理员可删除业务项")
+            return
+        item_id = int(body.get("id") or 0)
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT name FROM biz_items WHERE id = %s", (item_id,))
+                row = cur.fetchone()
+                if row is None:
+                    self.send_json({"code": 50000, "message": "业务项不存在"})
+                    return
+                usage = self.biz_item_usage(cur)
+                if usage.get(row["name"], 0) > 0:
+                    self.send_json({
+                        "code": 50000,
+                        "message": f"已有 {usage[row['name']]} 条执照任务用到该业务项，不能删除，可改为「停用」",
+                    })
+                    return
+                cur.execute("DELETE FROM biz_items WHERE id = %s", (item_id,))
             conn.commit()
         self.send_json({"code": 20000, "data": {"status": "success"}})
 

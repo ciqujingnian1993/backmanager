@@ -8,7 +8,8 @@ export const PAGE_OPTIONS = [
   { path: '/system/user', label: '用户管理' },
   { path: '/system/role', label: '角色管理' },
   { path: '/system/menu', label: '菜单管理' },
-  { path: '/system/platform', label: '平台管理' }
+  { path: '/system/platform', label: '平台管理' },
+  { path: '/system/bizitem', label: '业务项配置' }
 ]
 
 export const PAGE_PATHS = PAGE_OPTIONS.map(item => item.path)

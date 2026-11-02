@@ -171,6 +171,12 @@ export const asyncRoutes = [
         component: () => import('@/views/platform/index'),
         name: 'PlatformManage',
         meta: { title: '平台管理', icon: 'shopping', roles: ['admin'] }
+      },
+      {
+        path: 'bizitem',
+        component: () => import('@/views/bizitem/index'),
+        name: 'BizItemConfig',
+        meta: { title: '业务项配置', icon: 'star', roles: ['admin'] }
       }
     ]
   }

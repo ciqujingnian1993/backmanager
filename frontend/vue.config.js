@@ -15,6 +15,10 @@ const name = defaultSettings.title || 'vue Element Admin' // page title
 // port = 9527 npm run dev OR npm run dev --port = 9527
 const port = process.env.port || process.env.npm_config_port || 9527 // dev port
 
+// 本地联调时可指向本机后端：API_TARGET=http://127.0.0.1:7002 API_PREFIX=
+const apiTarget = process.env.API_TARGET || 'http://23.165.248.112'
+const apiPrefix = process.env.API_PREFIX === undefined ? '/prod-api' : process.env.API_PREFIX
+
 // All configuration item explanations can be find in https://cli.vuejs.org/config/
 module.exports = {
   /**
@@ -37,15 +41,15 @@ module.exports = {
       errors: true
     },
     // 关闭本地 mock，直接对接服务器上的 Python 后端（经 nginx /prod-api 反代到 127.0.0.1:7001）
-    // 若要用本地后端，把 target 改成 http://127.0.0.1:7001 并把 pathRewrite 去掉
+    // 本地联调：API_TARGET=http://127.0.0.1:7002 API_PREFIX= npm run dev（PREFIX 置空表示直接去掉 /dev-api 前缀）
     proxy: {
       '/dev-api': {
-        target: process.env.API_TARGET || 'http://23.165.248.112',
+        target: apiTarget,
         changeOrigin: true,
-        pathRewrite: { '^/dev-api': '/prod-api' }
+        pathRewrite: { '^/dev-api': apiPrefix }
       },
       '/uploads': {
-        target: process.env.API_TARGET || 'http://23.165.248.112',
+        target: apiTarget,
         changeOrigin: true
       }
     }

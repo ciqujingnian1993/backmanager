@@ -396,12 +396,37 @@
             </el-col>
           </el-row>
           <el-row :gutter="16">
-            <el-col :span="12">
+            <el-col :span="24">
               <el-form-item label="业务项">
-                <el-input v-model="detail.items" placeholder="例如 非+注销 / 年报补报" clearable />
+                <el-select
+                  :value="detail.item_list"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  popper-class="biz-item-dropdown"
+                  style="width: 100%"
+                  placeholder="从业务项配置里多选，也可直接输入新项"
+                  @change="value => handleItemsChange(detail, value)"
+                >
+                  <el-option
+                    v-for="item in bizItemOptions"
+                    :key="item.name"
+                    :label="item.name"
+                    :value="item.name"
+                  >
+                    <span class="option-name">{{ item.name }}</span>
+                    <span v-if="item.unit_price" class="option-price">¥{{ formatMoney(item.unit_price) }}</span>
+                  </el-option>
+                </el-select>
+                <div v-if="detail.item_list && detail.item_list.length > 1" class="items-preview">
+                  组合后：{{ joinItems(detail.item_list) }}
+                </div>
               </el-form-item>
             </el-col>
-            <el-col :span="6">
+          </el-row>
+          <el-row :gutter="16">
+            <el-col :span="8">
               <el-form-item label="单价" label-width="62px">
                 <el-input-number
                   v-model="detail.unit_price"
@@ -413,7 +438,7 @@
                 />
               </el-form-item>
             </el-col>
-            <el-col :span="6">
+            <el-col :span="8">
               <el-form-item label="数量" label-width="62px">
                 <el-input-number
                   v-model="detail.quantity"
@@ -494,7 +519,9 @@ import {
   deleteAccount
 } from '@/api/account'
 import { fetchPlatformList } from '@/api/platform'
+import { fetchBizItemList } from '@/api/bizitem'
 import { BIZ_STATUS_OPTIONS, TAX_STATUS_OPTIONS } from '@/constants/license'
+import { splitItems, joinItems, formatMoney } from '@/constants/bizitem'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const STATUS_MAP = {
@@ -543,6 +570,7 @@ export default {
       },
       categoryOptions: ['同行业', '代理记账', '工商注册', '变更注销'],
       platformOptions: [],
+      bizItemOptions: [],
       bizStatusOptions: BIZ_STATUS_OPTIONS,
       taxStatusOptions: TAX_STATUS_OPTIONS,
       listQuery: {
@@ -602,13 +630,17 @@ export default {
     this.getList()
     this.getSummary()
     this.loadPlatforms()
+    this.loadBizItems()
   },
   methods: {
+    formatMoney,
+    joinItems,
     // 从其它菜单切回本页时（keep-alive 还原）静默刷新，保证看到最新数据
     refreshPage() {
       this.getList()
       this.getSummary()
       this.loadPlatforms()
+      this.loadBizItems()
     },
     handleTabClick() {
       if (this.$route.query.tab !== this.activeView) {
@@ -623,6 +655,43 @@ export default {
         this.platformOptions = []
       }
     },
+    // 业务项字典（只取启用的），订单里多选组合
+    async loadBizItems() {
+      try {
+        const { data } = await fetchBizItemList()
+        this.bizItemOptions = (data || []).filter(item => item.active !== false)
+      } catch (error) {
+        this.bizItemOptions = []
+      }
+    },
+    itemsAutoSum(list) {
+      return (list || []).reduce((total, name) => {
+        const found = this.bizItemOptions.find(item => item.name === name)
+        return total + Number((found && found.unit_price) || 0)
+      }, 0)
+    },
+    // 选择业务项：拼成文本，并在「单价还没被手改」时按默认单价合计联动收入
+    handleItemsChange(detail, list) {
+      const selected = list || []
+      detail.item_list = selected
+      detail.items = joinItems(selected)
+      const sum = this.itemsAutoSum(selected)
+      const previous = Number(detail.__autoPrice || 0)
+      const current = detail.unit_price === undefined || detail.unit_price === null || detail.unit_price === ''
+        ? null
+        : Number(detail.unit_price)
+      const quantity = Number(detail.quantity || 1)
+      const revenue = detail.revenue === undefined || detail.revenue === null || detail.revenue === ''
+        ? null
+        : Number(detail.revenue)
+      if (current === null || current === previous) {
+        detail.unit_price = sum || undefined
+        if (revenue === null || revenue === Number((previous * quantity).toFixed(2))) {
+          detail.revenue = sum && quantity ? Number((sum * quantity).toFixed(2)) : undefined
+        }
+      }
+      detail.__autoPrice = sum
+    },
     emptyDetail() {
       return {
         id: undefined,
@@ -633,6 +702,8 @@ export default {
         biz_status: '',
         tax_status: '',
         items: '',
+        item_list: [],
+        __autoPrice: 0,
         unit_price: undefined,
         quantity: 1,
         revenue: undefined,
@@ -730,6 +801,8 @@ export default {
         biz_status: item.biz_status,
         tax_status: item.tax_status,
         items: item.items,
+        item_list: splitItems(item.items),
+        __autoPrice: this.itemsAutoSum(splitItems(item.items)),
         unit_price: item.unit_price === null ? undefined : item.unit_price,
         quantity: item.quantity === null ? 1 : item.quantity,
         revenue: item.revenue === null ? undefined : item.revenue,
@@ -783,7 +856,7 @@ export default {
           legal_id: (detail.legal_id || '').toUpperCase(),
           biz_status: detail.biz_status || '',
           tax_status: detail.tax_status || '',
-          items: (detail.items || '').trim(),
+          items: joinItems(detail.item_list) || (detail.items || '').trim(),
           unit_price: this.numberOrNull(detail.unit_price),
           quantity: detail.quantity === undefined || detail.quantity === null || detail.quantity === ''
             ? 1
@@ -1128,11 +1201,37 @@ export default {
     color: #303133;
     width: 100%;
   }
+
+  .items-preview {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #909399;
+    line-height: 18px;
+  }
 }
 
 .order-form {
   max-height: 68vh;
   overflow-y: auto;
   padding-right: 8px;
+}
+</style>
+
+<style lang="scss">
+/* 下拉挂在 body 上，scoped 样式够不到，用 popper-class 兜一层全局规则 */
+.biz-item-dropdown .el-select-dropdown__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.biz-item-dropdown .option-name {
+  flex: 1;
+}
+
+.biz-item-dropdown .option-price {
+  margin-left: 16px;
+  color: #f56c6c;
+  font-size: 13px;
 }
 </style>
