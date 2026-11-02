@@ -46,7 +46,7 @@ PROGRESS_STEPS = ["已录入", "已联系", "已报价", "已付款", "办理中
 
 # 营业执照状态（工商口径）与税务状态，前端下拉与此保持一致
 BIZ_STATUSES = ["正常", "年报异常", "地址异常", "另册管理", "吊销"]
-TAX_STATUSES = ["有税务", "无税务", "税务非正常"]
+TAX_STATUSES = ["税务正常", "无税务", "税务非正常"]
 
 COST_CATEGORIES = ["采购", "物流", "人工", "房租", "水电", "推广", "差旅", "办公", "其他"]
 
@@ -728,6 +728,10 @@ def init_db():
             active boolean NOT NULL DEFAULT true,
             created_at timestamptz NOT NULL DEFAULT now()
         )
+        """,
+        # 税务状态文案调整：有税务 → 税务正常，历史数据一并归一
+        """
+        UPDATE account_items SET tax_status = '税务正常' WHERE tax_status = '有税务'
         """,
     ]
     with connect() as conn:
