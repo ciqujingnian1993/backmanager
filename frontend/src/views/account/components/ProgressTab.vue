@@ -286,8 +286,8 @@ export default {
     }
   },
   created() {
-    const keyword = this.$route.query.keyword
-    if (keyword) this.listQuery.keyword = keyword
+    this.__querySign = ''
+    this.applyRouteQuery()
     this.refresh()
   },
   methods: {
@@ -295,7 +295,20 @@ export default {
     taxStatusType,
     // 从其它菜单切回本页时（keep-alive 还原）静默刷新
     refreshPage() {
+      this.applyRouteQuery()
       this.refresh()
+    },
+    // 首页「去跟进」穿透过来时带的关键字
+    applyRouteQuery() {
+      const q = this.$route.query || {}
+      const sign = JSON.stringify(q)
+      if (sign === this.__querySign) return false
+      this.__querySign = sign
+      if (!('keyword' in q) && !q.status) return false
+      this.listQuery.keyword = q.keyword || ''
+      this.listQuery.status = q.status || ''
+      this.listQuery.page = 1
+      return true
     },
     refresh() {
       this.getList()

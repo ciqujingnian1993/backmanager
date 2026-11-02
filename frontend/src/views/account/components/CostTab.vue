@@ -276,6 +276,8 @@ export default {
     }
   },
   created() {
+    this.__querySign = ''
+    this.applyRouteQuery()
     this.getSummary()
     this.getList()
     this.loadOrders()
@@ -283,9 +285,24 @@ export default {
   methods: {
     // 从其它菜单切回本页时（keep-alive 还原）静默刷新
     refreshPage() {
+      this.applyRouteQuery()
       this.getSummary()
       this.getList()
       this.loadOrders()
+    },
+    // 首页「成本构成」穿透过来时带在 URL 上的筛选条件
+    applyRouteQuery() {
+      const q = this.$route.query || {}
+      const sign = JSON.stringify(q)
+      if (sign === this.__querySign) return false
+      this.__querySign = sign
+      if (!('month' in q) && !q.category && !q.keyword) return false
+      this.listQuery.month = q.month === 'all' || !q.month ? '' : q.month
+      this.month = this.listQuery.month
+      this.listQuery.category = q.category || ''
+      this.listQuery.keyword = q.keyword || ''
+      this.listQuery.page = 1
+      return true
     },
     emptyForm() {
       const now = new Date()

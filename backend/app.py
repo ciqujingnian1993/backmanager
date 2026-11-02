@@ -1491,8 +1491,12 @@ class App(BaseHTTPRequestHandler):
             where.append("a.status = %s")
             params.append(query["status"])
         if query.get("category"):
-            where.append("a.category = %s")
-            params.append(query["category"])
+            # 首页「收入构成」里未填行业的归为「未分类」，用 __empty__ 表示空值
+            if query["category"] == "__empty__":
+                where.append("COALESCE(TRIM(a.category), '') = ''")
+            else:
+                where.append("a.category = %s")
+                params.append(query["category"])
         if query.get("platform"):
             where.append("a.platform = %s")
             params.append(query["platform"])

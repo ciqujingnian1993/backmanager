@@ -4,6 +4,12 @@
       <i class="el-icon-info" /> 订单查询仅供查看，如需新增或修改请到「订单管理」菜单
     </div>
 
+    <div v-if="drillTip" class="drill-tip">
+      <i class="el-icon-position" />
+      <span class="drill-text">首页穿透：{{ drillTip }}</span>
+      <el-button type="text" size="mini" @click="clearDrill">清除筛选</el-button>
+    </div>
+
     <div class="filter-container">
       <el-date-picker
         v-model="listQuery.month"
@@ -15,6 +21,13 @@
         :clearable="true"
         @change="handleFilter"
       />
+      <el-button
+        class="filter-item"
+        :type="listQuery.month ? 'default' : 'primary'"
+        @click="showAllMonths"
+      >
+        全部月份
+      </el-button>
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
@@ -32,6 +45,15 @@
         <el-option label="待定" value="pending" />
         <el-option label="进行中" value="doing" />
         <el-option label="已完成" value="done" />
+      </el-select>
+      <el-select
+        v-model="listQuery.category"
+        class="filter-item"
+        placeholder="行业"
+        clearable
+        @change="handleFilter"
+      >
+        <el-option v-for="item in categoryOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
       <el-select
         v-model="listQuery.biz_status"
@@ -136,7 +158,7 @@
 import Pagination from '@/components/Pagination'
 import OrderDetailDialog from './components/OrderDetailDialog'
 import OrderItemsTable from './components/OrderItemsTable'
-import { fetchAccountList } from '@/api/account'
+import { fetchAccountList, fetchAccountDetail } from '@/api/account'
 import { fetchPlatformList } from '@/api/platform'
 import { BIZ_STATUS_OPTIONS, TAX_STATUS_OPTIONS } from '@/constants/license'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
@@ -146,6 +168,9 @@ const STATUS_MAP = {
   doing: '进行中',
   done: '已完成'
 }
+
+const CATEGORY_OPTIONS = ['同行业', '代理记账', '工商注册', '变更注销']
+const DRILL_KEYS = ['status', 'category', 'biz_status', 'tax_status', 'platform', 'keyword', 'id']
 
 export default {
   name: 'OrderQuery',
@@ -163,29 +188,111 @@ export default {
       taxStatusOptions: TAX_STATUS_OPTIONS,
       detailVisible: false,
       detailRow: null,
+      drill: {},
+      pendingDetailId: null,
       listQuery: {
         page: 1,
         limit: 20,
         month,
         keyword: '',
         status: '',
+        category: '',
         platform: '',
         biz_status: '',
         tax_status: ''
       }
     }
   },
+  computed: {
+    categoryOptions() {
+      const list = CATEGORY_OPTIONS.map(name => ({ label: name, value: name }))
+      list.push({ label: '未分类', value: '__empty__' })
+      const current = this.listQuery.category
+      if (current && current !== '__empty__' && !CATEGORY_OPTIONS.includes(current)) {
+        list.push({ label: current, value: current })
+      }
+      return list
+    },
+    drillTip() {
+      const q = this.drill || {}
+      const parts = []
+      if (q.month === 'all') parts.push('全部月份')
+      else if (q.month) parts.push(q.month + ' 月')
+      if (q.status) parts.push('状态：' + (STATUS_MAP[q.status] || q.status))
+      if (q.category === '__empty__') parts.push('行业：未分类')
+      else if (q.category) parts.push('行业：' + q.category)
+      if (q.biz_status) parts.push('工商：' + q.biz_status)
+      if (q.tax_status) parts.push('税务：' + q.tax_status)
+      if (q.platform) parts.push('平台：' + q.platform)
+      if (q.keyword) parts.push('关键字：' + q.keyword)
+      if (q.id) parts.push('订单 #' + q.id)
+      return parts.join(' · ')
+    }
+  },
   created() {
-    const keyword = this.$route.query.keyword
-    if (keyword) this.listQuery.keyword = keyword
-    this.getList()
+    this.__querySign = ''
+    this.applyRouteQuery()
+    this.getList().then(this.openPendingDetail)
     this.getPlatforms()
   },
   methods: {
     // 从其它菜单切回本页时（keep-alive 还原）静默刷新
     refreshPage() {
-      this.getList()
+      this.applyRouteQuery()
+      this.getList().then(this.openPendingDetail)
       this.getPlatforms()
+    },
+    // 首页图表 / 卡片穿透过来时带在 URL 上的筛选条件
+    applyRouteQuery() {
+      const q = this.$route.query || {}
+      const sign = JSON.stringify(q)
+      if (sign === this.__querySign) return false
+      this.__querySign = sign
+      const next = { month: '', keyword: '', status: '', category: '', platform: '', biz_status: '', tax_status: '' }
+      if (q.month === 'all') next.month = ''
+      else if (q.month) next.month = q.month
+      DRILL_KEYS.forEach(key => {
+        if (key !== 'id' && q[key]) next[key] = q[key]
+      })
+      Object.assign(this.listQuery, next, { page: 1 })
+      this.drill = Object.assign({}, q)
+      this.pendingDetailId = q.id ? Number(q.id) : null
+      return true
+    },
+    // 带 id 跳过来时自动打开该订单详情，列表里没有就直接查详情接口
+    async openPendingDetail() {
+      const id = this.pendingDetailId
+      if (!id) return
+      this.pendingDetailId = null
+      const row = this.list.find(item => Number(item.id) === id)
+      if (row) {
+        this.handleDetail(row)
+        return
+      }
+      try {
+        const { data } = await fetchAccountDetail(id)
+        if (data) this.handleDetail(data)
+      } catch (error) {
+        this.$message.error('这条订单已不存在或无权查看')
+      }
+    },
+    clearDrill() {
+      this.drill = {}
+      this.__querySign = ''
+      this.listQuery.month = ''
+      this.listQuery.keyword = ''
+      this.listQuery.status = ''
+      this.listQuery.category = ''
+      this.listQuery.platform = ''
+      this.listQuery.biz_status = ''
+      this.listQuery.tax_status = ''
+      this.listQuery.page = 1
+      this.$router.replace({ path: this.$route.path })
+      this.getList()
+    },
+    showAllMonths() {
+      this.listQuery.month = ''
+      this.handleFilter()
     },
     handleDetail(row) {
       this.detailRow = row
@@ -246,6 +353,31 @@ export default {
 
   i {
     margin-right: 4px;
+  }
+}
+
+.drill-tip {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 7px 12px;
+  background: #ecf5ff;
+  border: 1px solid #d9ecff;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #409eff;
+
+  i {
+    margin-right: 6px;
+  }
+
+  .drill-text {
+    flex: 1;
+  }
+
+  .el-button {
+    padding: 0;
+    margin-left: 12px;
   }
 }
 

@@ -1,5 +1,5 @@
 <template>
-  <div ref="chart" class="base-chart" :style="{ height: height }" />
+  <div ref="chart" class="base-chart" :class="{ clickable: clickable }" :style="{ height: height }" />
 </template>
 
 <script>
@@ -15,6 +15,11 @@ export default {
     height: {
       type: String,
       default: '300px'
+    },
+    // 开启后鼠标移到图形上变手型，并向外抛 chart-click 事件
+    clickable: {
+      type: Boolean,
+      default: false
     }
   },
   data() {
@@ -34,6 +39,8 @@ export default {
   mounted() {
     this.chart = echarts.init(this.$refs.chart)
     this.chart.setOption(this.option, true)
+    // 图形点击向外抛，用于首页下钻到订单/成本明细
+    this.chart.on('click', params => this.$emit('chart-click', params))
     window.addEventListener('resize', this.resize)
     if (window.ResizeObserver) {
       this.observer = new ResizeObserver(this.resize)
@@ -62,5 +69,9 @@ export default {
 <style scoped>
 .base-chart {
   width: 100%;
+}
+
+.base-chart.clickable {
+  cursor: pointer;
 }
 </style>

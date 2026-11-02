@@ -3,8 +3,11 @@
     <!-- 核心指标 -->
     <el-row :gutter="16" class="stat-row">
       <el-col v-for="card in cards" :key="card.label" :xs="12" :sm="8" :lg="4">
-        <div class="stat-card">
-          <div class="stat-label">{{ card.label }}</div>
+        <div class="stat-card" :class="{ 'is-link': !!card.to }" @click="drillCard(card)">
+          <div class="stat-head">
+            <span class="stat-label">{{ card.label }}</span>
+            <i v-if="card.to" class="el-icon-arrow-right stat-go" />
+          </div>
           <div class="stat-value" :class="card.tone">{{ card.value }}</div>
           <div class="stat-foot">
             <span v-if="card.growth !== null && card.growth !== undefined" :class="card.growth >= 0 ? 'up' : 'down'">
@@ -22,9 +25,15 @@
         <el-card shadow="never" class="panel">
           <div slot="header" class="panel-head">
             <span>收支与利润率趋势 · 近 6 个月</span>
-            <span class="panel-tip">金额单位：元</span>
+            <span class="panel-tip">金额单位：元 · 点击柱子看当月订单</span>
           </div>
-          <base-chart v-if="hasTrend" :option="trendOption" height="330px" />
+          <base-chart
+            v-if="hasTrend"
+            :option="trendOption"
+            height="330px"
+            clickable
+            @chart-click="handleTrendClick"
+          />
           <div v-else class="empty">还没有收支数据，记一笔后这里会出现趋势</div>
         </el-card>
       </el-col>
@@ -32,9 +41,15 @@
         <el-card shadow="never" class="panel">
           <div slot="header" class="panel-head">
             <span>订单状态</span>
-            <span class="panel-tip">共 {{ kpi.orders }} 单</span>
+            <span class="panel-tip">共 {{ kpi.orders }} 单 · 点击圆环看订单</span>
           </div>
-          <base-chart v-if="kpi.orders" :option="statusOption" height="330px" />
+          <base-chart
+            v-if="kpi.orders"
+            :option="statusOption"
+            height="330px"
+            clickable
+            @chart-click="handleStatusClick"
+          />
           <div v-else class="empty">暂无订单</div>
         </el-card>
       </el-col>
@@ -46,9 +61,15 @@
         <el-card shadow="never" class="panel">
           <div slot="header" class="panel-head">
             <span>收入构成</span>
-            <span class="panel-tip">按行业</span>
+            <span class="panel-tip">按行业 · 点击看订单</span>
           </div>
-          <base-chart v-if="kpi.revenue" :option="revenueOption" height="290px" />
+          <base-chart
+            v-if="kpi.revenue"
+            :option="revenueOption"
+            height="290px"
+            clickable
+            @chart-click="handleRevenueClick"
+          />
           <div v-else class="empty">暂无收入</div>
         </el-card>
       </el-col>
@@ -56,9 +77,15 @@
         <el-card shadow="never" class="panel">
           <div slot="header" class="panel-head">
             <span>成本构成</span>
-            <span class="panel-tip">合计 {{ money(kpi.total_cost) }} 元</span>
+            <span class="panel-tip">合计 {{ money(kpi.total_cost) }} 元 · 点击看明细</span>
           </div>
-          <base-chart v-if="kpi.total_cost" :option="costOption" height="290px" />
+          <base-chart
+            v-if="kpi.total_cost"
+            :option="costOption"
+            height="290px"
+            clickable
+            @chart-click="handleCostClick"
+          />
           <div v-else class="empty">暂无成本</div>
         </el-card>
       </el-col>
@@ -66,10 +93,15 @@
         <el-card shadow="never" class="panel">
           <div slot="header" class="panel-head">
             <span>客户贡献</span>
-            <span class="panel-tip">按收入排序</span>
+            <span class="panel-tip">按收入排序 · 点击看该客户订单</span>
           </div>
           <div v-if="topClients.length" class="client-list">
-            <div v-for="(item, index) in topClients" :key="item.client" class="client-item">
+            <div
+              v-for="(item, index) in topClients"
+              :key="item.client"
+              class="client-item"
+              @click="openClient(item)"
+            >
               <span class="rank" :class="'rank-' + (index + 1)">{{ index + 1 }}</span>
               <div class="client-main">
                 <div class="client-top">
@@ -96,10 +128,16 @@
           <el-tag v-for="step in stepDist" :key="step.step" size="mini" type="info" effect="plain">
             {{ step.step }} {{ step.count }}
           </el-tag>
-          <el-button type="text" @click="goAccount('progress')">全部进度</el-button>
+          <el-button type="text" @click="goProgress()">全部进度</el-button>
         </div>
       </div>
-      <el-table :data="todos" size="medium" style="width: 100%">
+      <el-table
+        :data="todos"
+        size="medium"
+        style="width: 100%"
+        class="clickable-table"
+        @row-click="openDetail"
+      >
         <el-table-column label="紧急度" width="92" align="center">
           <template slot-scope="{ row }">
             <el-tag :type="levelType(row.level)" size="mini">{{ levelText(row.level) }}</el-tag>
@@ -139,9 +177,10 @@
             <div class="cell-sub">{{ row.reason }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100" align="center">
+        <el-table-column label="操作" width="150" align="center">
           <template slot-scope="{ row }">
-            <el-button type="text" @click="goAccount('progress', row.client)">去跟进</el-button>
+            <el-button type="text" @click.stop="openDetail(row)">详情</el-button>
+            <el-button type="text" @click.stop="goProgress(row.client)">去跟进</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -152,9 +191,15 @@
     <el-card shadow="never" class="panel">
       <div slot="header" class="panel-head">
         <span>最近订单</span>
-        <el-button type="text" @click="goAccount('table')">查看全部</el-button>
+        <el-button type="text" @click="goQuery({ month: 'all' })">查看全部</el-button>
       </div>
-      <el-table :data="recent" size="medium" style="width: 100%">
+      <el-table
+        :data="recent"
+        size="medium"
+        style="width: 100%"
+        class="clickable-table"
+        @row-click="openDetail"
+      >
         <el-table-column prop="biz_date" label="日期" width="96" />
         <el-table-column prop="category" label="行业" width="110" />
         <el-table-column prop="client" label="客户" min-width="130" />
@@ -173,15 +218,24 @@
             <el-tag :type="statusType(row.status)" size="mini">{{ statusText(row.status) }}</el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="操作" width="70" align="center">
+          <template slot-scope="{ row }">
+            <el-button type="text" @click.stop="openDetail(row)">详情</el-button>
+          </template>
+        </el-table-column>
       </el-table>
       <div v-if="!recent.length" class="empty">还没有订单记录，去「订单列表」新增一笔吧</div>
     </el-card>
+
+    <order-detail-dialog :visible.sync="detailVisible" :row="detailRow" />
   </div>
 </template>
 
 <script>
 import BaseChart from './components/BaseChart'
+import OrderDetailDialog from '@/views/account/components/OrderDetailDialog'
 import { fetchDashboardOverview } from '@/api/dashboard'
+import { fetchAccountDetail } from '@/api/account'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
 
 const STEPS = ['已录入', '已联系', '已报价', '已付款', '办理中', '已交付', '已完成']
@@ -224,17 +278,32 @@ function emptyData() {
 
 export default {
   name: 'Dashboard',
-  components: { BaseChart },
+  components: { BaseChart, OrderDetailDialog },
   mixins: [refreshOnActivate],
   data() {
     return {
       loading: false,
-      data: emptyData()
+      data: emptyData(),
+      detailVisible: false,
+      detailRow: null
     }
   },
   computed: {
     kpi() {
       return this.data.kpi
+    },
+    // 按当前账号的权限选择下钻目标页，没权限就退到同类可访问的页面
+    targets() {
+      const pick = (first, second) => {
+        if (this.canVisit(first)) return first
+        if (this.canVisit(second)) return second
+        return ''
+      }
+      return {
+        order: pick('/account/query', '/account/index'),
+        cost: pick('/cost/query', '/cost/index'),
+        progress: this.canVisit('/progress/index') ? '/progress/index' : ''
+      }
     },
     todos() {
       return this.data.todos || []
@@ -253,13 +322,54 @@ export default {
     },
     cards() {
       const kpi = this.kpi
+      const months = this.data.trend.months || []
+      const currentMonth = months.length ? months[months.length - 1] : ''
+      const orderPath = this.targets.order
+      const allOrders = orderPath ? { path: orderPath, query: { month: 'all' }} : null
       return [
-        { label: '总收入', value: '￥' + this.money(kpi.revenue), tone: 'revenue', foot: '本月 ￥' + this.money(kpi.month_revenue), growth: kpi.month_growth },
-        { label: '总支出', value: '￥' + this.money(kpi.total_cost), tone: 'cost', foot: '订单 ' + this.money(kpi.order_cost) + ' · 其他 ' + this.money(kpi.extra_cost) },
-        { label: '净利润', value: '￥' + this.money(kpi.profit), tone: 'profit', foot: '毛利率 ' + kpi.margin + '%' },
-        { label: '订单数', value: String(kpi.orders), tone: 'total', foot: '平均客单 ￥' + this.money(kpi.avg_ticket) },
-        { label: '待办订单', value: String(kpi.open_orders), tone: 'warn', foot: '高风险 ' + kpi.risk_orders + ' 单' },
-        { label: '本月利润', value: '￥' + this.money(kpi.month_profit), tone: 'month', foot: '本月支出 ￥' + this.money(kpi.month_cost) }
+        {
+          label: '总收入',
+          value: '￥' + this.money(kpi.revenue),
+          tone: 'revenue',
+          foot: '本月 ￥' + this.money(kpi.month_revenue),
+          growth: kpi.month_growth,
+          to: allOrders
+        },
+        {
+          label: '总支出',
+          value: '￥' + this.money(kpi.total_cost),
+          tone: 'cost',
+          foot: '订单 ' + this.money(kpi.order_cost) + ' · 其他 ' + this.money(kpi.extra_cost),
+          to: this.targets.cost ? { path: this.targets.cost, query: { month: 'all' }} : null
+        },
+        {
+          label: '净利润',
+          value: '￥' + this.money(kpi.profit),
+          tone: 'profit',
+          foot: '毛利率 ' + kpi.margin + '%',
+          to: allOrders
+        },
+        {
+          label: '订单数',
+          value: String(kpi.orders),
+          tone: 'total',
+          foot: '平均客单 ￥' + this.money(kpi.avg_ticket),
+          to: allOrders
+        },
+        {
+          label: '待办订单',
+          value: String(kpi.open_orders),
+          tone: 'warn',
+          foot: '高风险 ' + kpi.risk_orders + ' 单',
+          to: this.targets.progress ? { path: this.targets.progress } : null
+        },
+        {
+          label: '本月利润',
+          value: '￥' + this.money(kpi.month_profit),
+          tone: 'month',
+          foot: '本月支出 ￥' + this.money(kpi.month_cost),
+          to: orderPath ? { path: orderPath, query: { month: currentMonth || 'all' }} : null
+        }
       ]
     },
     trendOption() {
@@ -436,15 +546,106 @@ export default {
         this.loading = false
       }
     },
-    goAccount(target, keyword) {
-      const query = {}
-      if (keyword) query.keyword = keyword
-      if (target === 'progress') {
-        this.$router.push({ path: '/progress/index', query })
+    // 账号没有对应页面的权限时给个提示，避免跳到 404
+    canVisit(path) {
+      const matched = this.$router.match(path).matched
+      const top = matched.length ? matched[0].path : ''
+      return !!top && top !== '*' && top !== '/404'
+    },
+    drillCard(card) {
+      if (!card || !card.to) return
+      this.goto(card.to)
+    },
+    goto(target) {
+      if (!this.canVisit(target.path)) {
+        this.$message.warning('当前账号没有该页面权限，请联系管理员开通')
         return
       }
-      // 查看全部订单走只读的「订单查询」页
-      this.$router.push({ path: '/account/query', query })
+      this.$router.push(target)
+    },
+    goQuery(query) {
+      const path = this.targets.order
+      if (!path) {
+        this.$message.warning('当前账号没有订单查看权限，请联系管理员开通')
+        return
+      }
+      // 「订单管理」页只认关键字，其余筛选项只在「订单查询」页生效
+      const params = Object.assign({}, query)
+      if (path === '/account/index') {
+        Object.keys(params).forEach(key => {
+          if (key !== 'keyword') delete params[key]
+        })
+      }
+      this.goto({ path, query: params })
+    },
+    goCost(query) {
+      const path = this.targets.cost
+      if (!path) {
+        this.$message.warning('当前账号没有成本查看权限，请联系管理员开通')
+        return
+      }
+      this.goto({ path, query: query || { month: 'all' }})
+    },
+    goProgress(keyword) {
+      if (!this.targets.progress) {
+        this.$message.warning('当前账号没有订单进度权限，请联系管理员开通')
+        return
+      }
+      const query = {}
+      if (keyword) query.keyword = keyword
+      this.goto({ path: this.targets.progress, query })
+    },
+    // 趋势图：点某个月 → 该月订单
+    handleTrendClick(params) {
+      const months = this.data.trend.months || []
+      const month = months[params.dataIndex]
+      if (!month) return
+      this.goQuery({ month })
+    },
+    // 订单状态环：待定 / 进行中 / 已完成 → 对应状态订单
+    handleStatusClick(params) {
+      const map = { 待定: 'pending', 进行中: 'doing', 已完成: 'done' }
+      const status = map[params.name]
+      if (!status) return
+      this.goQuery({ month: 'all', status })
+    },
+    // 收入构成：行业 → 该行业订单
+    handleRevenueClick(params) {
+      if (!params.name) return
+      const query = { month: 'all' }
+      if (params.name === '未分类') {
+        query.category = '__empty__'
+      } else {
+        query.category = params.name
+      }
+      this.goQuery(query)
+    },
+    // 成本构成：订单直接成本 → 订单查询；其它类别 → 成本查询
+    handleCostClick(params) {
+      const name = params.name
+      if (!name) return
+      if (name === '订单直接成本') {
+        this.goQuery({ month: 'all' })
+        return
+      }
+      this.goCost({ month: 'all', category: name })
+    },
+    openClient(item) {
+      if (!item || !item.client) return
+      this.goQuery({ month: 'all', keyword: item.client })
+    },
+    // 待办 / 最近订单：不去别的页面，直接弹订单详情（执照 + 金额 + 任务）
+    async openDetail(row) {
+      if (!row || !row.id) return
+      this.detailRow = row
+      this.detailVisible = true
+      if (row.details && row.details.length) return
+      try {
+        const { data } = await fetchAccountDetail(row.id)
+        this.detailRow = data
+      } catch (error) {
+        this.$message.error('订单详情加载失败，请到「订单查询」查看')
+      }
     },
     money(value) {
       const num = Number(value || 0)
@@ -499,12 +700,42 @@ export default {
   }
 
   .stat-card {
+    position: relative;
     background: #fff;
     border-radius: 6px;
     padding: 14px 16px;
     margin-bottom: 16px;
     box-shadow: 0 1px 6px rgba(0, 21, 255, 0.06);
     border-left: 3px solid #dcdfe6;
+    transition: box-shadow 0.2s, transform 0.2s;
+
+    &.is-link {
+      cursor: pointer;
+
+      &:hover {
+        box-shadow: 0 4px 14px rgba(64, 158, 255, 0.18);
+        transform: translateY(-1px);
+
+        .stat-go {
+          color: #409eff;
+          opacity: 1;
+          transform: translateX(2px);
+        }
+      }
+    }
+  }
+
+  .stat-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .stat-go {
+    font-size: 13px;
+    color: #c0c4cc;
+    opacity: 0.45;
+    transition: all 0.2s;
   }
 
   .stat-label {
@@ -587,7 +818,23 @@ export default {
   .client-item {
     display: flex;
     align-items: flex-start;
-    padding: 7px 0;
+    padding: 7px 6px;
+    margin: 0 -6px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.2s;
+
+    &:hover {
+      background: #f5f9ff;
+
+      .client-name {
+        color: #409eff;
+      }
+    }
+  }
+
+  .clickable-table ::v-deep .el-table__row {
+    cursor: pointer;
   }
 
   .rank {
