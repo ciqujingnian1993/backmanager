@@ -56,7 +56,7 @@
             <span>收入构成（按行业）</span>
             <span class="panel-tip">合计 {{ money(report.summary.revenue) }} 元</span>
           </div>
-          <base-chart v-if="revenuePieData.length" :option="revenuePieOption" height="300px" />
+          <base-chart v-if="revenuePieData.length" :option="revenuePieOption" height="320px" />
           <div v-else class="empty-chart">本月暂无收入数据</div>
         </el-card>
       </el-col>
@@ -66,7 +66,7 @@
             <span>支出构成（按类别）</span>
             <span class="panel-tip">合计 {{ money(report.summary.opex) }} 元</span>
           </div>
-          <base-chart v-if="costPieData.length" :option="costPieOption" height="300px" />
+          <base-chart v-if="costPieData.length" :option="costPieOption" height="320px" />
           <div v-else class="empty-chart">本月暂无支出数据</div>
         </el-card>
       </el-col>
@@ -311,15 +311,58 @@ export default {
       return status === 'done' ? 'success' : status === 'doing' ? '' : 'info'
     },
     pieOption(data) {
+      const total = data.reduce((sum, item) => sum + Number(item.value || 0), 0)
+      const pctOf = value => (total ? (Number(value || 0) / total) * 100 : 0)
       return {
-        tooltip: { trigger: 'item', formatter: '{b}: {c} 元 ({d}%)' },
-        legend: { orient: 'vertical', right: 6, top: 'middle', type: 'scroll' },
+        tooltip: {
+          trigger: 'item',
+          formatter: params => `${params.marker}${params.name}<br/>金额：${this.money(params.value)} 元<br/>占比：${params.percent}%`
+        },
+        // 指引标签左右两侧展开，图例挪到底部，避免和图例抢位置
+        legend: {
+          bottom: 0,
+          left: 'center',
+          icon: 'circle',
+          itemWidth: 8,
+          itemHeight: 8,
+          itemGap: 14,
+          type: 'scroll',
+          textStyle: { color: '#606266', fontSize: 12 }
+        },
         series: [{
           type: 'pie',
-          radius: ['42%', '68%'],
-          center: ['38%', '50%'],
-          label: { show: false },
-          data
+          radius: ['36%', '56%'],
+          center: ['50%', '45%'],
+          avoidLabelOverlap: true,
+          minAngle: 2,
+          itemStyle: { borderColor: '#fff', borderWidth: 2 },
+          label: {
+            show: true,
+            position: 'outside',
+            // 单行「名称 占比 金额」：ECharts 4 的多行标签在避让时只按单行高度算，容易叠字
+            formatter: params => {
+              const name = String(params.name || '')
+              const short = name.length > 8 ? name.slice(0, 7) + '…' : name
+              return `{name|${short} }{pct|${params.percent}%}{val| ${this.money(params.value)}元}`
+            },
+            rich: {
+              name: { fontSize: 12, fontWeight: 500, color: '#303133' },
+              pct: { fontSize: 12, color: '#909399' },
+              val: { fontSize: 12, color: '#606266' }
+            }
+          },
+          labelLine: {
+            show: true,
+            length: 12,
+            length2: 16,
+            smooth: 0.2,
+            lineStyle: { color: '#c8ccd4', width: 1 }
+          },
+          data: data.map(item => {
+            // 占比过小的扇区不画标签和指引线，避免挤成一团（图例/悬浮提示里仍可看到）
+            const visible = pctOf(item.value) >= 3
+            return Object.assign({}, item, { label: { show: visible }, labelLine: { show: visible }})
+          })
         }]
       }
     },
