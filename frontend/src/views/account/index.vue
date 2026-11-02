@@ -221,7 +221,7 @@
     <el-dialog
       :title="dialogType === 'edit' ? '编辑订单' : '新增订单'"
       :visible.sync="dialogVisible"
-      width="1020px"
+      width="1120px"
       top="5vh"
     >
       <el-form
@@ -311,11 +311,22 @@
           v-for="(detail, index) in form.details"
           :key="index"
           class="detail-card"
+          :class="{ 'is-collapsed': detail.__collapsed }"
         >
           <div class="detail-card-head">
+            <i
+              class="collapse-btn"
+              :class="detail.__collapsed ? 'el-icon-arrow-right' : 'el-icon-arrow-down'"
+              @click="toggleDetail(detail)"
+            />
             <span class="detail-card-index">{{ index + 1 }}</span>
             <span class="detail-card-title">执照 {{ index + 1 }}</span>
             <span v-if="detail.license_name" class="detail-card-sub">{{ detail.license_name }}</span>
+            <span v-if="detail.__collapsed" class="detail-card-sum">
+              <span v-if="detail.items" class="sum-item">{{ detail.items }}</span>
+              <span v-if="detail.revenue" class="sum-item">收入 ¥{{ formatMoney(detail.revenue) }}</span>
+              <span v-if="!detail.items && !detail.revenue" class="sum-empty">未填写业务项</span>
+            </span>
             <div class="detail-card-tools">
               <span class="tool-label">任务状态</span>
               <el-select v-model="detail.status" size="mini" class="status-select">
@@ -334,7 +345,7 @@
             </div>
           </div>
 
-          <div class="detail-card-body">
+          <div v-show="!detail.__collapsed" class="detail-card-body">
             <el-row :gutter="16">
               <el-col :span="12">
                 <el-form-item label="执照名称">
@@ -430,52 +441,66 @@
               <div class="money-panel">
                 <div class="money-cell">
                   <span class="money-label">单价</span>
-                  <el-input-number
-                    v-model="detail.unit_price"
-                    :controls="false"
-                    :min="0"
-                    :precision="2"
-                    placeholder="0.00"
-                  />
+                  <div class="money-input">
+                    <i class="money-unit">¥</i>
+                    <el-input-number
+                      v-model="detail.unit_price"
+                      :controls="false"
+                      :min="0"
+                      :precision="2"
+                      placeholder="0.00"
+                    />
+                  </div>
                 </div>
                 <div class="money-cell">
                   <span class="money-label">数量</span>
-                  <el-input-number
-                    v-model="detail.quantity"
-                    :controls="false"
-                    :min="1"
-                    :precision="0"
-                  />
+                  <div class="money-input">
+                    <el-input-number
+                      v-model="detail.quantity"
+                      :controls="false"
+                      :min="1"
+                      :precision="0"
+                    />
+                  </div>
                 </div>
                 <div class="money-cell">
                   <span class="money-label">收入</span>
-                  <el-input-number
-                    v-model="detail.revenue"
-                    :controls="false"
-                    :min="0"
-                    :precision="2"
-                    placeholder="0.00"
-                  />
+                  <div class="money-input">
+                    <i class="money-unit">¥</i>
+                    <el-input-number
+                      v-model="detail.revenue"
+                      :controls="false"
+                      :min="0"
+                      :precision="2"
+                      placeholder="0.00"
+                    />
+                  </div>
                 </div>
                 <div class="money-cell">
                   <span class="money-label">成本</span>
-                  <el-input-number
-                    v-model="detail.cost"
-                    :controls="false"
-                    :min="0"
-                    :precision="2"
-                    placeholder="0.00"
-                  />
+                  <div class="money-input">
+                    <i class="money-unit">¥</i>
+                    <el-input-number
+                      v-model="detail.cost"
+                      :controls="false"
+                      :min="0"
+                      :precision="2"
+                      placeholder="0.00"
+                    />
+                  </div>
                 </div>
                 <div class="money-cell money-cell-profit">
                   <span class="money-label">利润</span>
-                  <el-input-number
-                    v-model="detail.profit"
-                    :controls="false"
-                    :min="0"
-                    :precision="2"
-                    placeholder="0.00"
-                  />
+                  <div class="money-input">
+                    <i class="money-unit">¥</i>
+                    <el-input-number
+                      v-model="detail.profit"
+                      :controls="false"
+                      :min="0"
+                      :precision="2"
+                      placeholder="0.00"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -697,6 +722,7 @@ export default {
         items: '',
         item_list: [],
         __autoPrice: 0,
+        __collapsed: false,
         unit_price: undefined,
         quantity: 1,
         revenue: undefined,
@@ -723,6 +749,10 @@ export default {
     },
     addDetail() {
       this.form.details.push(this.emptyDetail())
+    },
+    // 卡片折叠/展开（纯前端展示状态，不参与提交）
+    toggleDetail(detail) {
+      this.$set(detail, '__collapsed', !detail.__collapsed)
     },
     removeDetail(index) {
       if (this.form.details.length <= 1) return
@@ -840,7 +870,17 @@ export default {
     },
     submitForm() {
       this.$refs.accountForm.validate(valid => {
-        if (!valid) return false
+        if (!valid) {
+          // 校验失败时先把折叠的卡片展开，否则红字藏在收起的内容里，用户看不到哪里错了
+          this.form.details.forEach(detail => { detail.__collapsed = false })
+          this.$nextTick(() => {
+            const firstError = document.querySelector('.order-form .el-form-item.is-error')
+            if (firstError && firstError.scrollIntoView) {
+              firstError.scrollIntoView({ block: 'center' })
+            }
+          })
+          return false
+        }
         const details = this.form.details.map(detail => ({
           id: detail.id,
           license_name: (detail.license_name || '').trim(),
@@ -1159,6 +1199,14 @@ export default {
       border-color: #c6dcf5;
       box-shadow: 0 2px 12px rgba(64, 158, 255, 0.1);
     }
+
+    &.is-collapsed:hover {
+      box-shadow: none;
+    }
+
+    &.is-collapsed .detail-card-head {
+      border-bottom-color: transparent;
+    }
   }
 
   .detail-card-head {
@@ -1168,6 +1216,19 @@ export default {
     padding: 0 14px;
     background: linear-gradient(180deg, #f7faff 0%, #f1f5fb 100%);
     border-bottom: 1px solid #e9eff7;
+
+    .collapse-btn {
+      flex: none;
+      width: 16px;
+      margin-right: 2px;
+      font-size: 12px;
+      color: #909399;
+      cursor: pointer;
+
+      &:hover {
+        color: #409eff;
+      }
+    }
 
     .detail-card-index {
       flex: none;
@@ -1200,6 +1261,30 @@ export default {
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
+    }
+
+    /* 折叠后补一行摘要，收起状态也能看清业务项和金额 */
+    .detail-card-sum {
+      display: flex;
+      align-items: center;
+      margin-left: 10px;
+      overflow: hidden;
+
+      .sum-item {
+        flex: none;
+        margin-right: 8px;
+        padding: 0 8px;
+        border-radius: 10px;
+        background: #ecf5ff;
+        font-size: 12px;
+        line-height: 20px;
+        color: #409eff;
+      }
+
+      .sum-empty {
+        font-size: 12px;
+        color: #c0c4cc;
+      }
     }
 
     .detail-card-tools {
@@ -1275,14 +1360,31 @@ export default {
         color: #909399;
       }
 
-      .el-input-number {
-        width: 100%;
-      }
+      .money-input {
+        position: relative;
 
-      /* 去掉 controls 后 element 仍留了给加减按钮的内边距，这里改回正常留白并左对齐 */
-      ::v-deep .el-input__inner {
-        padding: 0 10px;
-        text-align: left;
+        .money-unit {
+          position: absolute;
+          top: 0;
+          left: 10px;
+          z-index: 2;
+          font-style: normal;
+          font-size: 13px;
+          line-height: 40px;
+          color: #c0c4cc;
+          pointer-events: none;
+        }
+
+        .el-input-number {
+          width: 100%;
+        }
+
+        /* 去掉 controls 后 element 仍留了给加减按钮的内边距，这里改回正常留白并左对齐；
+           左边留 24px 给 ¥，数量格也一起留，保证五格数字左边缘成一条线 */
+        ::v-deep .el-input__inner {
+          padding: 0 10px 0 24px;
+          text-align: left;
+        }
       }
     }
 
