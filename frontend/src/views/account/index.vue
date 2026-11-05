@@ -304,6 +304,29 @@
             placeholder="订单层面的补充说明，可不填"
           />
         </el-form-item>
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="订单编号">
+              <el-input
+                :value="form.order_no"
+                class="order-no-input"
+                readonly
+                placeholder="保存后自动生成"
+              >
+                <el-button
+                  v-if="form.order_no"
+                  slot="append"
+                  icon="el-icon-document-copy"
+                  title="复制订单编号"
+                  @click="copyOrderNo"
+                />
+              </el-input>
+              <div v-if="!form.order_no" class="form-hint">
+                保存后按「DD + 录入日期 + 序号」生成，如 DD20261105-0001
+              </div>
+            </el-form-item>
+          </el-col>
+        </el-row>
 
         <div class="form-section-title">
           执照明细与任务
@@ -671,6 +694,32 @@ export default {
     splitBizStatus,
     bizStatusText,
     // 工商状态多选：下拉里用数组，提交时拼回「正常,另册管理」
+    // 订单编号复制：优先用剪贴板 API，http 环境下退回到临时 input
+    copyOrderNo() {
+      const text = this.form.order_no
+      if (!text) return
+      const done = () => this.$message.success('订单编号已复制')
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(() => this.copyByTextarea(text, done))
+        return
+      }
+      this.copyByTextarea(text, done)
+    },
+    copyByTextarea(text, done) {
+      const el = document.createElement('textarea')
+      el.value = text
+      el.style.position = 'fixed'
+      el.style.opacity = '0'
+      document.body.appendChild(el)
+      el.select()
+      try {
+        document.execCommand('copy')
+        done()
+      } catch (e) {
+        this.$message.warning('复制失败，请手动选择编号复制')
+      }
+      document.body.removeChild(el)
+    },
     setBizStatus(detail, values) {
       const prev = splitBizStatus(detail.biz_status)
       const picked = Array.isArray(values) ? values.slice() : []
@@ -1469,6 +1518,18 @@ export default {
     font-size: 12px;
     color: #909399;
     line-height: 18px;
+  }
+
+  .form-hint {
+    margin-top: 2px;
+    font-size: 12px;
+    color: #909399;
+    line-height: 18px;
+  }
+
+  .order-no-input ::v-deep .el-input__inner {
+    font-family: Menlo, Consolas, monospace;
+    letter-spacing: 0.3px;
   }
 
   /* 工商状态平铺勾选：5 项全部展开，不再折叠成「+N」；窄屏自动换行 */
