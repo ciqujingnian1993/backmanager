@@ -104,125 +104,83 @@
       </el-button>
     </div>
 
-    <el-tabs v-model="activeView" class="account-tabs" @tab-click="handleTabClick">
-      <el-tab-pane label="订单动态" name="chat">
-        <div class="chat-panel">
-          <div class="chat-title">订单动态 ({{ total }})</div>
-          <div v-for="item in list" :key="item.id" class="chat-item">
-            <div class="chat-time">{{ formatTime(item.timestamp) }}</div>
-            <div class="chat-row">
-              <div class="chat-avatar">
-                <svg-icon icon-class="money" />
-              </div>
-              <div class="chat-body">
-                <div class="chat-bubble">
-                  <div class="chat-text">{{ item.message }}</div>
-                  <div class="chat-meta">
-                    <span class="chat-tags">
-                      <el-tag :type="statusType(item.status)" size="mini">
-                        {{ statusText(item.status) }}
-                      </el-tag>
-                      <el-tag v-if="item.license_count" size="mini" effect="plain" class="license-tag">
-                        {{ item.license_count }} 个执照 · 完成 {{ item.done_count }}
-                      </el-tag>
-                    </span>
-                    <span class="chat-ops">
-                      <el-button type="text" size="mini" @click="handleDetail(item)">详情</el-button>
-                      <el-button type="text" size="mini" @click="handleUpdate(item)">编辑</el-button>
-                      <el-button type="text" size="mini" class="danger-text" @click="handleDelete(item)">删除</el-button>
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div v-if="!list.length && !loading" class="chat-empty">
-            <template v-if="filtering">
-              当前筛选条件下没有订单
-              <el-button type="text" @click="resetFilters">清除筛选条件</el-button>
-            </template>
-            <template v-else>
-              还没有订单，点击「新增订单」开始录入
-            </template>
-          </div>
-        </div>
-      </el-tab-pane>
-
-      <el-tab-pane label="明细表格" name="table">
-        <el-table
-          v-loading="loading"
-          :data="list"
-          :empty-text="filtering ? '当前筛选条件下没有订单，试试切到「全部月份」' : '还没有订单'"
-          border
-          fit
-          highlight-current-row
-          style="width: 100%"
-        >
-          <el-table-column type="expand">
-            <template slot-scope="{ row }">
-              <order-items-table :details="row.details" />
-            </template>
-          </el-table-column>
-          <el-table-column label="订单编号" width="148" align="center">
-            <template slot-scope="{ row }">
-              <span v-if="row.order_no" class="order-no-text">{{ row.order_no }}</span>
-              <span v-else class="muted-text">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="biz_date" label="日期" width="88" align="center" />
-          <el-table-column prop="category" label="行业" width="92" align="center" />
-          <el-table-column prop="client" label="客户" min-width="100" show-overflow-tooltip />
-          <el-table-column label="手机号" width="116">
-            <template slot-scope="{ row }">
-              <span v-if="row.phone">{{ row.phone }}</span>
-              <span v-else class="muted-text">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="平台" width="78" align="center">
-            <template slot-scope="{ row }">
-              <el-tag v-if="row.platform" size="mini" effect="plain">{{ row.platform }}</el-tag>
-              <span v-else class="muted-text">—</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="执照" width="100" align="center">
-            <template slot-scope="{ row }">
-              <el-button type="text" size="mini" @click="handleDetail(row)">
-                {{ row.license_count }} 个（完成 {{ row.done_count }}）
-              </el-button>
-            </template>
-          </el-table-column>
-          <el-table-column prop="items" label="业务项" min-width="108" show-overflow-tooltip />
-          <el-table-column label="收入" width="82" align="center">
-            <template slot-scope="{ row }">{{ amount(row.revenue) }}</template>
-          </el-table-column>
-          <el-table-column label="状态" width="80" align="center">
-            <template slot-scope="{ row }">
-              <el-tag :type="statusType(row.status)" size="mini">
-                {{ statusText(row.status) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="完成时间" width="138" align="center">
-            <template slot-scope="{ row }">{{ completedText(row.completed_at) }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="128" align="center" fixed="right">
-            <template slot-scope="{ row }">
-              <el-button type="text" size="mini" @click="handleDetail(row)">详情</el-button>
-              <el-button type="text" size="mini" @click="handleUpdate(row)">编辑</el-button>
-              <el-button type="text" size="mini" class="danger-text" @click="handleDelete(row)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <pagination
-          v-show="total > 0"
-          :total="total"
-          :page.sync="listQuery.page"
-          :limit.sync="listQuery.limit"
-          @pagination="getList"
-        />
-      </el-tab-pane>
-
-    </el-tabs>
+    <div class="table-panel">
+      <div class="panel-head">
+        <span class="panel-title">订单列表</span>
+        <span class="panel-count">共 {{ total }} 单</span>
+      </div>
+      <el-table
+        v-loading="loading"
+        :data="list"
+        :empty-text="filtering ? '当前筛选条件下没有订单，试试切到「全部月份」' : '还没有订单'"
+        border
+        fit
+        highlight-current-row
+        style="width: 100%"
+      >
+        <el-table-column type="expand">
+          <template slot-scope="{ row }">
+            <order-items-table :details="row.details" />
+          </template>
+        </el-table-column>
+        <el-table-column label="订单编号" width="148" align="center">
+          <template slot-scope="{ row }">
+            <span v-if="row.order_no" class="order-no-text">{{ row.order_no }}</span>
+            <span v-else class="muted-text">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="biz_date" label="日期" width="88" align="center" />
+        <el-table-column prop="category" label="行业" width="92" align="center" />
+        <el-table-column prop="client" label="客户" min-width="100" show-overflow-tooltip />
+        <el-table-column label="手机号" width="116">
+          <template slot-scope="{ row }">
+            <span v-if="row.phone">{{ row.phone }}</span>
+            <span v-else class="muted-text">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="平台" width="78" align="center">
+          <template slot-scope="{ row }">
+            <el-tag v-if="row.platform" size="mini" effect="plain">{{ row.platform }}</el-tag>
+            <span v-else class="muted-text">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="执照" width="100" align="center">
+          <template slot-scope="{ row }">
+            <el-button type="text" size="mini" @click="handleDetail(row)">
+              {{ row.license_count }} 个（完成 {{ row.done_count }}）
+            </el-button>
+          </template>
+        </el-table-column>
+        <el-table-column prop="items" label="业务项" min-width="108" show-overflow-tooltip />
+        <el-table-column label="收入" width="82" align="center">
+          <template slot-scope="{ row }">{{ amount(row.revenue) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="80" align="center">
+          <template slot-scope="{ row }">
+            <el-tag :type="statusType(row.status)" size="mini">
+              {{ statusText(row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="完成时间" width="138" align="center">
+          <template slot-scope="{ row }">{{ completedText(row.completed_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="128" align="center" fixed="right">
+          <template slot-scope="{ row }">
+            <el-button type="text" size="mini" @click="handleDetail(row)">详情</el-button>
+            <el-button type="text" size="mini" @click="handleUpdate(row)">编辑</el-button>
+            <el-button type="text" size="mini" class="danger-text" @click="handleDelete(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <pagination
+        v-show="total > 0"
+        :total="total"
+        :page.sync="listQuery.page"
+        :limit.sync="listQuery.limit"
+        @pagination="getList"
+      />
+    </div>
 
     <el-dialog
       :title="dialogTitle"
@@ -547,10 +505,6 @@
             </el-form-item>
           </div>
         </div>
-
-        <el-form-item label="消息预览">
-          <div class="preview-bubble">{{ previewMessage }}</div>
-        </el-form-item>
       </el-form>
       <div slot="footer" class="dialog-footer">
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -610,7 +564,6 @@ export default {
     const now = new Date()
     const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
     return {
-      activeView: 'chat',
       currentMonth,
       loading: false,
       saving: false,
@@ -665,9 +618,6 @@ export default {
     }
   },
   computed: {
-    previewMessage() {
-      return this.buildMessage(this.form)
-    },
     monthSuffix() {
       return this.listQuery.month ? `（${this.listQuery.month}）` : '（全部）'
     },
@@ -684,10 +634,6 @@ export default {
     }
   },
   created() {
-    const tab = this.$route.query.tab
-    if (['chat', 'table'].indexOf(tab) > -1) {
-      this.activeView = tab
-    }
     const keyword = this.$route.query.keyword
     if (keyword) this.listQuery.keyword = keyword
     this.getList()
@@ -720,12 +666,6 @@ export default {
       this.getSummary()
       this.loadPlatforms()
       this.loadBizItems()
-    },
-    handleTabClick() {
-      if (this.$route.query.tab !== this.activeView) {
-        const query = { ...this.$route.query, tab: this.activeView }
-        this.$router.replace({ query })
-      }
     },
     async loadPlatforms() {
       try {
@@ -1013,51 +953,6 @@ export default {
           })
       })
     },
-    buildMessage(form) {
-      const details = form.details || []
-      const items = details.map(item => (item.items || '').trim()).filter(Boolean)
-      const lines = ['【订单】']
-      const head = [form.biz_date, form.category].filter(Boolean).join(' ')
-      if (head) lines.push(head)
-      let subject = form.client || ''
-      if (details.length <= 1 && items.length) subject += items[0]
-      if (subject) lines.push(subject)
-      if (details.length > 1) lines.push(`共 ${details.length} 个执照任务`)
-      if (form.phone) lines.push('手机：' + form.phone)
-
-      details.forEach((detail, index) => {
-        const extras = []
-        if (detail.biz_status) extras.push('工商：' + this.bizStatusText(detail.biz_status))
-        if (detail.tax_status) extras.push('税务：' + detail.tax_status)
-        if (detail.items) extras.push('业务：' + detail.items)
-        if (!detail.license_name && !extras.length) return
-        const prefix = details.length > 1 ? `执照${index + 1}：` : '执照：'
-        let line = prefix + (detail.license_name || '未填名称')
-        if (extras.length) line += '（' + extras.join(' / ') + '）'
-        lines.push(line)
-      })
-
-      const totalRevenue = this.sumRevenue(details, 'revenue')
-      const totalCost = this.sumRevenue(details, 'cost')
-      if (details.length === 1) {
-        const single = details[0]
-        const unitPrice = this.numberOrNull(single.unit_price)
-        const quantity = Number(single.quantity || 1)
-        const revenue = this.numberOrNull(single.revenue)
-        const amount = revenue === null && unitPrice !== null ? unitPrice * quantity : revenue
-        lines.push(`单价：${this.amount(unitPrice)}`)
-        if (quantity && quantity !== 1) {
-          lines.push(`数量：${this.amount(quantity)}`)
-          lines.push(`金额：${this.amount(amount)}`)
-        }
-      }
-      const profit = totalRevenue === null || totalCost === null ? null : totalRevenue - totalCost
-      lines.push(`收入：${this.amount(totalRevenue)}`)
-      lines.push(`成本：${this.amount(totalCost)}`)
-      lines.push(`利润：${this.amount(profit)}`)
-      if (form.remark) lines.push(`备注：${form.remark}`)
-      return lines.join('\n')
-    },
     // 明细金额合计：全空返回 null（显示「待定」），否则空值按 0 计
     sumRevenue(details, key) {
       const values = details
@@ -1098,19 +993,6 @@ export default {
     },
     statusType(status) {
       return status === 'done' ? 'success' : status === 'doing' ? 'warning' : 'info'
-    },
-    formatTime(timestamp) {
-      if (!timestamp) return ''
-      const date = new Date(timestamp)
-      const now = new Date()
-      const pad = v => String(v).padStart(2, '0')
-      const hm = `${pad(date.getHours())}:${pad(date.getMinutes())}`
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-      const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
-      const diffDays = Math.round((todayStart - dayStart) / 864e5)
-      if (diffDays === 0) return hm
-      if (diffDays === 1) return `昨天 ${hm}`
-      return `${date.getMonth() + 1}月${date.getDate()}日 ${hm}`
     }
   }
 }
@@ -1154,80 +1036,24 @@ export default {
     margin-bottom: 8px;
   }
 
-  .account-tabs {
-    margin-top: 6px;
-  }
+  .table-panel {
+    .panel-head {
+      display: flex;
+      align-items: baseline;
+      margin: 6px 0 10px;
+    }
 
-  .chat-panel {
-    background: #f5f5f5;
-    border-radius: 4px;
-    padding: 18px 16px;
-    min-height: 320px;
-  }
+    .panel-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #303133;
+    }
 
-  .chat-title {
-    font-size: 15px;
-    font-weight: 600;
-    color: #303133;
-    margin-bottom: 16px;
-  }
-
-  .chat-item {
-    margin-bottom: 18px;
-  }
-
-  .chat-time {
-    text-align: center;
-    color: #9a9a9a;
-    font-size: 12px;
-    margin-bottom: 10px;
-  }
-
-  .chat-row {
-    display: flex;
-    align-items: flex-start;
-  }
-
-  .chat-avatar {
-    flex: 0 0 36px;
-    width: 36px;
-    height: 36px;
-    border-radius: 4px;
-    background: #dcdfe6;
-    color: #909399;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .chat-body {
-    margin-left: 10px;
-    max-width: 620px;
-  }
-
-  .chat-bubble {
-    background: #fff;
-    border-radius: 6px;
-    padding: 10px 12px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-  }
-
-  .chat-text {
-    white-space: pre-line;
-    line-height: 1.7;
-    font-size: 14px;
-    color: #303133;
-  }
-
-  .chat-meta {
-    margin-top: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .chat-tags .license-tag {
-    margin-left: 6px;
+    .panel-count {
+      margin-left: 8px;
+      font-size: 12px;
+      color: #909399;
+    }
   }
 
   .order-no-text {
@@ -1476,34 +1302,12 @@ export default {
     }
   }
 
-  .chat-ops .el-button + .el-button {
-    margin-left: 8px;
-  }
-
   .danger-text {
     color: #f56c6c;
   }
 
   .muted-text {
     color: #c0c4cc;
-  }
-
-  .chat-empty {
-    text-align: center;
-    color: #909399;
-    font-size: 13px;
-    padding: 40px 0;
-  }
-
-  .preview-bubble {
-    background: #f5f5f5;
-    border-radius: 6px;
-    padding: 10px 12px;
-    white-space: pre-line;
-    line-height: 1.7;
-    font-size: 14px;
-    color: #303133;
-    width: 100%;
   }
 
   .items-preview {
