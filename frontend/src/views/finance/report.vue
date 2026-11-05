@@ -129,6 +129,12 @@
         <span class="panel-tip">本月归属的全部订单</span>
       </div>
       <el-table :data="report.orders" size="small" border>
+        <el-table-column label="订单编号" width="148" align="center">
+          <template slot-scope="{ row }">
+            <span v-if="row.order_no" class="order-no-text">{{ row.order_no }}</span>
+            <span v-else class="muted-text">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="订单" width="70" align="center">
           <template slot-scope="{ row }">#{{ row.id }}</template>
         </el-table-column>
@@ -425,9 +431,9 @@ export default {
         ...d.client_rank.map(item => [item.name, item.orders, item.revenue]),
         [],
         ['订单明细'],
-        ['订单', '业务日期', '客户', '行业', '平台', '业务项', '执照数', '收入', '成本', '利润', '状态'],
+        ['订单编号', '订单', '业务日期', '客户', '行业', '平台', '业务项', '执照数', '收入', '成本', '利润', '状态'],
         ...d.orders.map(item => [
-          '#' + item.id, item.biz_date, item.client, item.category, item.platform,
+          item.order_no || '', '#' + item.id, item.biz_date, item.client, item.category, item.platform,
           item.items, item.licenses, item.revenue, item.cost, item.profit, this.orderStatusText(item.status)
         ]),
         [],
@@ -545,6 +551,16 @@ export default {
 
   .danger-text {
     color: #cf1322;
+  }
+
+  .order-no-text {
+    font-family: Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: #606266;
+  }
+
+  .muted-text {
+    color: #c0c4cc;
   }
 }
 </style>

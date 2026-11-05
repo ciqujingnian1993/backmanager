@@ -198,6 +198,13 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+def generate_order_no(stamp_ms, record_id):
+    """订单编号：DD + 录入日期（北京时间）+ 4 位订单 id，如 DD20261105-0001。
+    序号取自订单 id（全表自增），天然不重复；日期取业务录入时间，和列表里看到的日期一致。"""
+    moment = datetime.fromtimestamp(int(stamp_ms or now_ms()) / 1000, tz=timezone.utc) + timedelta(hours=8)
+    return "DD%s-%s" % (moment.strftime("%Y%m%d"), str(int(record_id)).zfill(4))
+
+
 def format_completed(stamp):
     """毫秒时间戳 → 「YYYY-MM-DD HH:MM」（按北京时间 UTC+8，服务器本身跑在 UTC）。"""
     if not stamp:
@@ -391,6 +398,8 @@ def account_message(record):
     """订单消息文案：一单可挂多个执照，每个执照一行。"""
     details = record.get("details") or []
     lines = ["【订单】"]
+    if record.get("order_no"):
+        lines.append("编号：" + record["order_no"])
     head = " ".join(part for part in [record.get("biz_date"), record.get("category")] if part)
     if head:
         lines.append(head)
@@ -554,6 +563,7 @@ def account_out(row, details=None):
     details = details or []
     record = {
         "id": row["id"],
+        "order_no": row.get("order_no") or "",
         "timestamp": int(row["timestamp"] or 0),
         "biz_date": row["biz_date"] or "",
         "category": row["category"] or "",
@@ -953,6 +963,21 @@ def init_db():
         # 税务状态文案调整：有税务 → 税务正常，历史数据一并归一
         """
         UPDATE account_items SET tax_status = '税务正常' WHERE tax_status = '有税务'
+        """,
+        # 订单编号：DD + 录入日期（北京时间）+ 4 位订单 id，历史数据按录入时间回填
+        """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS order_no text
+        """,
+        """
+        UPDATE account_records
+           SET order_no = 'DD' || to_char(
+                   to_timestamp(timestamp / 1000.0) AT TIME ZONE 'Asia/Shanghai',
+                   'YYYYMMDD') || '-' || lpad(id::text, 4, '0')
+         WHERE order_no IS NULL
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS account_records_order_no_uidx
+        ON account_records (order_no)
         """,
     ]
     with connect() as conn:
@@ -1763,12 +1788,12 @@ class App(BaseHTTPRequestHandler):
             keyword = "%" + query["keyword"] + "%"
             where.append(
                 "(a.client ILIKE %s OR a.items ILIKE %s OR a.category ILIKE %s OR a.remark ILIKE %s"
-                " OR a.phone ILIKE %s"
+                " OR a.phone ILIKE %s OR a.order_no ILIKE %s"
                 " OR EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND ("
                 " i.license_name ILIKE %s OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s"
                 " OR i.items ILIKE %s)))"
             )
-            params.extend([keyword] * 9)
+            params.extend([keyword] * 10)
         if query.get("status"):
             where.append("a.status = %s")
             params.append(query["status"])
@@ -2041,6 +2066,13 @@ class App(BaseHTTPRequestHandler):
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql, params)
                 row = cur.fetchone()
+                # 订单编号在拿到 id 后生成：DD + 录入日期 + 4 位 id
+                order_no = generate_order_no(values["timestamp"], row["id"])
+                cur.execute(
+                    "UPDATE account_records SET order_no = %s WHERE id = %s",
+                    (order_no, row["id"]),
+                )
+                row["order_no"] = order_no
                 operator = user["username"] if user else ""
                 account_record = {
                     "id": row["id"],
@@ -2149,6 +2181,7 @@ class App(BaseHTTPRequestHandler):
                             item.update({
                                 "client": account_row["client"] or "",
                                 "phone": account_row["phone"] or "",
+                                "order_no": account_row.get("order_no") or "",
                                 "biz_date": account_row["biz_date"] or "",
                                 "category": account_row["category"] or "",
                                 "account_status": account_row["status"] or "pending",
@@ -2167,10 +2200,11 @@ class App(BaseHTTPRequestHandler):
         keyword = (query.get("keyword") or "").strip()
         if keyword:
             where.append(
-                "(a.client ILIKE %s OR a.phone ILIKE %s OR i.items ILIKE %s OR i.license_name ILIKE %s"
+                "(a.client ILIKE %s OR a.phone ILIKE %s OR a.order_no ILIKE %s"
+                " OR i.items ILIKE %s OR i.license_name ILIKE %s"
                 " OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s)"
             )
-            params.extend(["%" + keyword + "%"] * 6)
+            params.extend(["%" + keyword + "%"] * 7)
         if query.get("status"):
             where.append("i.status = %s")
             params.append(query["status"])
@@ -2189,7 +2223,7 @@ class App(BaseHTTPRequestHandler):
         limit = min(max(int(query.get("limit") or 20), 1), 200)
         sql = """
             SELECT i.*, a.client, a.phone, a.biz_date, a.category, a.platform,
-                   a.status AS account_status,
+                   a.order_no, a.status AS account_status,
                    p.step AS last_step,
                    p.status AS last_status,
                    p.note AS last_note,
@@ -2227,6 +2261,7 @@ class App(BaseHTTPRequestHandler):
                     record.update({
                         "client": row["client"] or "",
                         "phone": row["phone"] or "",
+                        "order_no": row.get("order_no") or "",
                         "biz_date": row["biz_date"] or "",
                         "category": row["category"] or "",
                         "platform": row["platform"] or "",
@@ -2431,6 +2466,7 @@ class App(BaseHTTPRequestHandler):
             license_count[row["account_id"]] = license_count.get(row["account_id"], 0) + 1
         order_rows = [{
             "id": row["id"],
+            "order_no": row.get("order_no") or "",
             "biz_date": row.get("biz_date") or "",
             "client": row.get("client") or "",
             "category": row.get("category") or "",

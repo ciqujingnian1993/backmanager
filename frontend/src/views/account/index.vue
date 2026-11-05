@@ -49,7 +49,7 @@
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
-        placeholder="搜索客户 / 手机号 / 执照 / 法人"
+        placeholder="搜索订单编号 / 客户 / 手机号 / 执照 / 法人"
         clearable
         @keyup.enter.native="handleFilter"
       />
@@ -163,6 +163,12 @@
               <order-items-table :details="row.details" />
             </template>
           </el-table-column>
+          <el-table-column label="订单编号" width="148" align="center">
+            <template slot-scope="{ row }">
+              <span v-if="row.order_no" class="order-no-text">{{ row.order_no }}</span>
+              <span v-else class="muted-text">—</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="biz_date" label="日期" width="88" align="center" />
           <el-table-column prop="category" label="行业" width="92" align="center" />
           <el-table-column prop="client" label="客户" min-width="100" show-overflow-tooltip />
@@ -219,7 +225,7 @@
     </el-tabs>
 
     <el-dialog
-      :title="dialogType === 'edit' ? '编辑订单' : '新增订单'"
+      :title="dialogTitle"
       :visible.sync="dialogVisible"
       width="1120px"
       top="5vh"
@@ -630,6 +636,11 @@ export default {
     monthSuffix() {
       return this.listQuery.month ? `（${this.listQuery.month}）` : '（全部）'
     },
+    // 编辑时把订单编号带到标题上，方便核对；新增时编号由后端在保存后生成
+    dialogTitle() {
+      if (this.dialogType !== 'edit') return '新增订单'
+      return this.form.order_no ? `编辑订单 · ${this.form.order_no}` : '编辑订单'
+    },
     filtering() {
       return Boolean(
         this.listQuery.month || this.listQuery.keyword || this.listQuery.status ||
@@ -738,6 +749,7 @@ export default {
       const day = String(now.getDate()).padStart(2, '0')
       return {
         id: undefined,
+        order_no: '',
         biz_date: `${month}/${day}`,
         category: '',
         client: '',
@@ -836,6 +848,7 @@ export default {
       }))
       this.form = {
         id: row.id,
+        order_no: row.order_no,
         biz_date: row.biz_date,
         category: row.category,
         client: row.client,
@@ -1152,6 +1165,12 @@ export default {
 
   .chat-tags .license-tag {
     margin-left: 6px;
+  }
+
+  .order-no-text {
+    font-family: Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: #606266;
   }
 
   .form-section-title {

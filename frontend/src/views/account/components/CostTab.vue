@@ -195,7 +195,7 @@
                 <el-option
                   v-for="item in orders"
                   :key="item.id"
-                  :label="`#${item.id} ${item.client || ''} ${item.items || ''}`"
+                  :label="`#${item.id}${item.order_no ? ' · ' + item.order_no : ''} ${item.client || ''} ${item.items || ''}`"
                   :value="item.id"
                 />
               </el-select>

@@ -31,7 +31,7 @@
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
-        placeholder="搜索客户 / 手机号 / 执照 / 法人"
+        placeholder="搜索订单编号 / 客户 / 手机号 / 执照 / 法人"
         clearable
         @keyup.enter.native="handleFilter"
       />
@@ -98,6 +98,12 @@
       <el-table-column type="expand">
         <template slot-scope="{ row }">
           <order-items-table :details="row.details" />
+        </template>
+      </el-table-column>
+      <el-table-column label="订单编号" width="148" align="center">
+        <template slot-scope="{ row }">
+          <span v-if="row.order_no" class="order-no-text">{{ row.order_no }}</span>
+          <span v-else class="muted-text">—</span>
         </template>
       </el-table-column>
       <el-table-column prop="biz_date" label="日期" width="88" align="center" />
@@ -396,5 +402,11 @@ export default {
 
 .muted-text {
   color: #c0c4cc;
+}
+
+.order-no-text {
+  font-family: Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #606266;
 }
 </style>

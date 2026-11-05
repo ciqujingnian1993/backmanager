@@ -42,7 +42,7 @@
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
-        placeholder="搜索客户 / 手机号 / 执照 / 法人"
+        placeholder="搜索订单编号 / 客户 / 手机号 / 执照 / 法人"
         clearable
         @keyup.enter.native="handleFilter"
       />
@@ -89,6 +89,12 @@
     >
       <el-table-column label="订单" width="62" align="center">
         <template slot-scope="{ row }">#{{ row.account_id }}</template>
+      </el-table-column>
+      <el-table-column label="订单编号" width="148" align="center">
+        <template slot-scope="{ row }">
+          <span v-if="row.order_no" class="order-no-text">{{ row.order_no }}</span>
+          <span v-else class="muted-text">—</span>
+        </template>
       </el-table-column>
       <el-table-column label="客户 / 执照" min-width="220" show-overflow-tooltip>
         <template slot-scope="{ row }">
@@ -173,6 +179,7 @@
       top="5vh"
     >
       <div v-if="current" class="task-summary">
+        <div class="task-cell"><span class="task-label">订单编号</span>{{ current.order_no || '—' }}</div>
         <div class="task-cell"><span class="task-label">客户</span>{{ current.client || '—' }}</div>
         <div class="task-cell"><span class="task-label">手机号</span>{{ current.phone || '—' }}</div>
         <div class="task-cell"><span class="task-label">业务项</span>{{ current.items || '—' }}</div>
@@ -692,6 +699,12 @@ export default {
 
   .muted-text {
     color: #c0c4cc;
+  }
+
+  .order-no-text {
+    font-family: Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: #606266;
   }
 
   .time-text {
