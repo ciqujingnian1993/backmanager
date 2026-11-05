@@ -93,8 +93,25 @@ def stage_group_key(step):
     return "common"
 
 # 营业执照状态（工商口径）与税务状态，前端下拉与此保持一致
+# 工商状态支持多选，库里用英文逗号拼接，顺序按本数组固定（如「正常,另册管理」）
 BIZ_STATUSES = ["正常", "年报异常", "地址异常", "另册管理", "吊销"]
-TAX_STATUSES = ["税务正常", "无税务", "税务非正常"]
+TAX_STATUSES = ["税务正常", "无税务", "税务非正常", "清算"]
+
+
+def normalize_multi_status(value, allowed):
+    """多选状态归一：兼容数组/字符串（中文逗号、顿号、斜杠分隔），按 allowed 顺序去重拼接。"""
+    if isinstance(value, (list, tuple, set)):
+        raw = [str(item).strip() for item in value]
+    else:
+        raw = [part.strip() for part in re.split(r"[,，、/|]", str(value or ""))]
+    picked = []
+    for item in raw:
+        if item and item not in picked:
+            picked.append(item)
+    # 已知取值排前面并保持固定顺序，历史遗留的自定义值原样跟在后面
+    ordered = [item for item in allowed if item in picked]
+    ordered.extend(item for item in picked if item not in allowed)
+    return ",".join(ordered)
 
 COST_CATEGORIES = ["采购", "物流", "人工", "房租", "水电", "推广", "差旅", "办公", "其他"]
 
@@ -417,7 +434,7 @@ def account_message(record):
         name = detail.get("license_name") or ""
         extras = []
         if detail.get("biz_status"):
-            extras.append("工商：" + detail["biz_status"])
+            extras.append("工商：" + normalize_multi_status(detail["biz_status"], BIZ_STATUSES).replace(",", "、"))
         if detail.get("tax_status"):
             extras.append("税务：" + detail["tax_status"])
         if detail.get("items"):
@@ -963,6 +980,21 @@ def init_db():
         # 税务状态文案调整：有税务 → 税务正常，历史数据一并归一
         """
         UPDATE account_items SET tax_status = '税务正常' WHERE tax_status = '有税务'
+        """,
+        # 工商状态改为多选：历史数据里的中文逗号/顿号/空格统一成英文逗号分隔
+        # 空格按分隔符处理（状态名本身不含空格），空片段丢弃，重复执行无副作用
+        """
+        UPDATE account_items
+           SET biz_status = array_to_string(
+                   array_remove(
+                       string_to_array(
+                           regexp_replace(biz_status,
+                                          '[[:space:]]*[,，、/|][[:space:]]*|[[:space:]]+',
+                                          ',', 'g'),
+                           ','
+                       ), ''
+                   ), ',')
+         WHERE biz_status ~ '[，、/| ]'
         """,
         # 订单编号：DD + 录入日期（北京时间）+ 4 位订单 id，历史数据按录入时间回填
         """
@@ -1808,8 +1840,10 @@ class App(BaseHTTPRequestHandler):
             where.append("a.platform = %s")
             params.append(query["platform"])
         if query.get("biz_status"):
+            # 工商状态可多选，库里是「正常,另册管理」这类逗号串，按元素命中
             where.append(
-                "EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND i.biz_status = %s)"
+                "EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id"
+                " AND %s = ANY(string_to_array(COALESCE(i.biz_status, ''), ',')))"
             )
             params.append(query["biz_status"])
         if query.get("tax_status"):
@@ -1956,7 +1990,7 @@ class App(BaseHTTPRequestHandler):
             completed_at = int(prior) if prior else now_ms()
         else:
             completed_at = None
-        biz_status = (pick("biz_status") or "").strip()
+        biz_status = normalize_multi_status(pick("biz_status"), BIZ_STATUSES)
         tax_status = (pick("tax_status") or "").strip()
         return {
             "license_name": (pick("license_name") or "").strip(),
@@ -2209,7 +2243,8 @@ class App(BaseHTTPRequestHandler):
             where.append("i.status = %s")
             params.append(query["status"])
         if query.get("biz_status"):
-            where.append("i.biz_status = %s")
+            # 多选状态按逗号拆分后匹配单个取值
+            where.append("%s = ANY(string_to_array(COALESCE(i.biz_status, ''), ','))")
             params.append(query["biz_status"])
         if query.get("tax_status"):
             where.append("i.tax_status = %s")

@@ -43,9 +43,18 @@
           <div class="license-cell">
             <span class="detail-label">工商状态</span>
             <span class="detail-value">
-              <el-tag v-if="item.biz_status" size="mini" :type="bizStatusType(item.biz_status)" effect="plain">
-                {{ item.biz_status }}
-              </el-tag>
+              <template v-if="splitBizStatus(item.biz_status).length">
+                <el-tag
+                  v-for="name in splitBizStatus(item.biz_status)"
+                  :key="name"
+                  size="mini"
+                  :type="bizStatusType(name)"
+                  effect="plain"
+                  class="status-tag"
+                >
+                  {{ name }}
+                </el-tag>
+              </template>
               <span v-else>—</span>
             </span>
           </div>
@@ -109,7 +118,7 @@
 </template>
 
 <script>
-import { bizStatusType, taxStatusType } from '@/constants/license'
+import { bizStatusType, taxStatusType, splitBizStatus } from '@/constants/license'
 import { shortStage } from '@/constants/progress'
 
 const STATUS_MAP = {
@@ -156,6 +165,7 @@ export default {
   methods: {
     bizStatusType,
     taxStatusType,
+    splitBizStatus,
     statusText(status) {
       return STATUS_MAP[status] || '待定'
     },
@@ -249,6 +259,11 @@ export default {
   .detail-value {
     color: #303133;
     word-break: break-all;
+  }
+
+  // 工商状态多选：标签逐个排列，超出换行
+  .status-tag {
+    margin: 0 4px 2px 0;
   }
 
   .detail-empty {

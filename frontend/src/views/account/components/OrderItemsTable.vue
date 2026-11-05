@@ -7,11 +7,19 @@
       <el-table-column prop="license_name" label="执照名称" min-width="170" show-overflow-tooltip>
         <template slot-scope="{ row }">{{ row.license_name || '—' }}</template>
       </el-table-column>
-      <el-table-column label="工商状态" width="95" align="center">
+      <el-table-column label="工商状态" width="118" align="center">
         <template slot-scope="{ row }">
-          <el-tag v-if="row.biz_status" size="mini" :type="bizStatusType(row.biz_status)" effect="plain">
-            {{ row.biz_status }}
-          </el-tag>
+          <div v-if="splitBizStatus(row.biz_status).length" class="status-tags">
+            <el-tag
+              v-for="name in splitBizStatus(row.biz_status)"
+              :key="name"
+              size="mini"
+              :type="bizStatusType(name)"
+              effect="plain"
+            >
+              {{ name }}
+            </el-tag>
+          </div>
           <span v-else class="muted-text">—</span>
         </template>
       </el-table-column>
@@ -48,7 +56,7 @@
 </template>
 
 <script>
-import { bizStatusType, taxStatusType } from '@/constants/license'
+import { bizStatusType, taxStatusType, splitBizStatus } from '@/constants/license'
 
 const STATUS_MAP = {
   pending: '待定',
@@ -67,6 +75,7 @@ export default {
   methods: {
     bizStatusType,
     taxStatusType,
+    splitBizStatus,
     maskId(value) {
       const text = String(value || '').trim()
       if (!text) return '—'
@@ -101,6 +110,18 @@ export default {
 
   .muted-text {
     color: #c0c4cc;
+  }
+
+  // 多选时标签换行排列，列宽内自动折行
+  .status-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 3px;
+    justify-content: center;
+  }
+
+  .status-tags .el-tag + .el-tag {
+    margin-left: 0;
   }
 
   .items-empty {

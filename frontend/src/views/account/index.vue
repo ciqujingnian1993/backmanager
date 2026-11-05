@@ -399,7 +399,15 @@
             <el-row :gutter="16">
               <el-col :span="12">
                 <el-form-item label="工商状态">
-                  <el-select v-model="detail.biz_status" style="width: 100%" clearable placeholder="可不选">
+                  <el-select
+                    :value="splitBizStatus(detail.biz_status)"
+                    multiple
+                    collapse-tags
+                    style="width: 100%"
+                    clearable
+                    placeholder="可多选，如：正常 + 另册管理"
+                    @change="values => setBizStatus(detail, values)"
+                  >
                     <el-option v-for="item in bizStatusOptions" :key="item" :label="item" :value="item" />
                   </el-select>
                 </el-form-item>
@@ -543,7 +551,7 @@ import {
 } from '@/api/account'
 import { fetchPlatformList } from '@/api/platform'
 import { fetchBizItemList } from '@/api/bizitem'
-import { BIZ_STATUS_OPTIONS, TAX_STATUS_OPTIONS } from '@/constants/license'
+import { BIZ_STATUS_OPTIONS, TAX_STATUS_OPTIONS, splitBizStatus, joinBizStatus, bizStatusText } from '@/constants/license'
 import { splitItems, joinItems, formatMoney } from '@/constants/bizitem'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
 
@@ -663,6 +671,12 @@ export default {
   methods: {
     formatMoney,
     joinItems,
+    splitBizStatus,
+    bizStatusText,
+    // 工商状态多选：下拉里用数组，提交时拼回「正常,另册管理」
+    setBizStatus(detail, values) {
+      detail.biz_status = joinBizStatus(values)
+    },
     // 从其它菜单切回本页时（keep-alive 还原）静默刷新，保证看到最新数据
     refreshPage() {
       this.getList()
@@ -970,7 +984,7 @@ export default {
 
       details.forEach((detail, index) => {
         const extras = []
-        if (detail.biz_status) extras.push('工商：' + detail.biz_status)
+        if (detail.biz_status) extras.push('工商：' + this.bizStatusText(detail.biz_status))
         if (detail.tax_status) extras.push('税务：' + detail.tax_status)
         if (detail.items) extras.push('业务：' + detail.items)
         if (!detail.license_name && !extras.length) return

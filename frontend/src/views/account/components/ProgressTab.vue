@@ -102,11 +102,19 @@
           <div class="cell-sub">{{ row.client || '—' }}<span v-if="row.items"> · {{ row.items }}</span></div>
         </template>
       </el-table-column>
-      <el-table-column label="工商状态" width="88" align="center">
+      <el-table-column label="工商状态" width="112" align="center">
         <template slot-scope="{ row }">
-          <el-tag v-if="row.biz_status" size="mini" :type="bizStatusType(row.biz_status)" effect="plain">
-            {{ row.biz_status }}
-          </el-tag>
+          <div v-if="splitBizStatus(row.biz_status).length" class="status-tags">
+            <el-tag
+              v-for="name in splitBizStatus(row.biz_status)"
+              :key="name"
+              size="mini"
+              :type="bizStatusType(name)"
+              effect="plain"
+            >
+              {{ name }}
+            </el-tag>
+          </div>
           <span v-else class="muted-text">—</span>
         </template>
       </el-table-column>
@@ -183,7 +191,7 @@
         <div class="task-cell"><span class="task-label">客户</span>{{ current.client || '—' }}</div>
         <div class="task-cell"><span class="task-label">手机号</span>{{ current.phone || '—' }}</div>
         <div class="task-cell"><span class="task-label">业务项</span>{{ current.items || '—' }}</div>
-        <div class="task-cell"><span class="task-label">工商状态</span>{{ current.biz_status || '—' }}</div>
+        <div class="task-cell"><span class="task-label">工商状态</span>{{ bizStatusText(current.biz_status) || '—' }}</div>
         <div class="task-cell"><span class="task-label">税务状态</span>{{ current.tax_status || '—' }}</div>
         <div class="task-cell"><span class="task-label">任务金额</span>{{ amount(current.revenue) }}</div>
       </div>
@@ -327,7 +335,14 @@ import {
   createProgress,
   deleteProgress
 } from '@/api/progress'
-import { BIZ_STATUS_OPTIONS, TAX_STATUS_OPTIONS, bizStatusType, taxStatusType } from '@/constants/license'
+import {
+  BIZ_STATUS_OPTIONS,
+  TAX_STATUS_OPTIONS,
+  bizStatusType,
+  taxStatusType,
+  splitBizStatus,
+  bizStatusText
+} from '@/constants/license'
 import {
   STAGE_GROUPS,
   GROUP_META,
@@ -427,6 +442,8 @@ export default {
   methods: {
     bizStatusType,
     taxStatusType,
+    splitBizStatus,
+    bizStatusText,
     groupKeyOfStep,
     shortStage,
     stepTagType,
@@ -699,6 +716,18 @@ export default {
 
   .muted-text {
     color: #c0c4cc;
+  }
+
+  // 工商状态多选：列宽内自动换行排列
+  .status-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 3px;
+    justify-content: center;
+  }
+
+  .status-tags .el-tag + .el-tag {
+    margin-left: 0;
   }
 
   .order-no-text {
