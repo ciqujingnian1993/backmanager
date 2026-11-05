@@ -218,6 +218,14 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+def normalize_phone(value):
+    """手机号只留数字：粘贴「+86 138 0013 8000」这种整串也能一步收拾干净。"""
+    digits = re.sub(r"\D", "", str(value or ""))
+    if len(digits) > 11 and digits.startswith("86"):
+        digits = digits[2:]
+    return digits[:11]
+
+
 def generate_order_no(stamp_ms, record_id):
     """订单编号：DD + 录入日期（北京时间）+ 4 位订单 id，如 DD20261105-0001。
     序号取自订单 id（全表自增），天然不重复；日期取业务录入时间，和列表里看到的日期一致。"""
@@ -486,6 +494,7 @@ def item_out(row):
         "credit_code": row.get("credit_code") or "",
         "legal_person": row.get("legal_person") or "",
         "legal_id": row.get("legal_id") or "",
+        "legal_phone": row.get("legal_phone") or "",
         "biz_status": row.get("biz_status") or "",
         "tax_status": row.get("tax_status") or "",
         "items": row.get("items") or "",
@@ -611,6 +620,7 @@ def account_out(row, details=None):
     record["credit_code"] = first.get("credit_code") or row.get("credit_code") or ""
     record["legal_person"] = first.get("legal_person") or row.get("legal_person") or ""
     record["legal_id"] = first.get("legal_id") or row.get("legal_id") or ""
+    record["legal_phone"] = first.get("legal_phone") or ""
     record["message"] = account_message(record)
     return record
 
@@ -881,6 +891,7 @@ def init_db():
             credit_code text,
             legal_person text,
             legal_id text,
+            legal_phone text,
             biz_status text,
             tax_status text,
             items text,
@@ -1018,6 +1029,10 @@ def init_db():
         # 平台订单编号：人工填写的第三方渠道单号，可空
         """
         ALTER TABLE account_records ADD COLUMN IF NOT EXISTS platform_order_no text DEFAULT ''
+        """,
+        # 法人手机号：挂在每条执照上，不同执照法人可能不同
+        """
+        ALTER TABLE account_items ADD COLUMN IF NOT EXISTS legal_phone text
         """,
     ]
     with connect() as conn:
@@ -1831,9 +1846,9 @@ class App(BaseHTTPRequestHandler):
                 " OR a.phone ILIKE %s OR a.order_no ILIKE %s OR a.platform_order_no ILIKE %s"
                 " OR EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND ("
                 " i.license_name ILIKE %s OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s"
-                " OR i.items ILIKE %s)))"
+                " OR i.legal_phone ILIKE %s OR i.items ILIKE %s)))"
             )
-            params.extend([keyword] * 11)
+            params.extend([keyword] * 12)
         if query.get("status"):
             where.append("a.status = %s")
             params.append(query["status"])
@@ -1967,6 +1982,7 @@ class App(BaseHTTPRequestHandler):
             "credit_code": ((first.get("credit_code") or "").strip() or (pick("credit_code") or "")).strip().upper(),
             "legal_person": (first.get("legal_person") or "").strip() or (pick("legal_person") or "").strip(),
             "legal_id": ((first.get("legal_id") or "").strip() or (pick("legal_id") or "")).strip().upper(),
+            "legal_phone": normalize_phone(first.get("legal_phone") or pick("legal_phone")),
         }
 
     def detail_values(self, body, existing=None):
@@ -2006,6 +2022,8 @@ class App(BaseHTTPRequestHandler):
             "credit_code": (pick("credit_code") or "").strip().upper(),
             "legal_person": (pick("legal_person") or "").strip(),
             "legal_id": (pick("legal_id") or "").strip().upper(),
+            # 法人手机号：容忍用户手输的空格/短横线/+86 前缀
+            "legal_phone": normalize_phone(pick("legal_phone")),
             "biz_status": biz_status,
             "tax_status": tax_status,
             "items": (pick("items") or "").strip(),
@@ -2021,12 +2039,13 @@ class App(BaseHTTPRequestHandler):
 
     def insert_detail(self, cur, account_id, values, position, operator, account_record):
         columns = [
-            "account_id", "license_name", "credit_code", "legal_person", "legal_id",
+            "account_id", "license_name", "credit_code", "legal_person", "legal_id", "legal_phone",
             "biz_status", "tax_status", "items", "unit_price", "quantity",
             "revenue", "cost", "profit", "status", "completed_at", "remark", "sort",
         ]
         params = [
-            account_id, values["license_name"], values["credit_code"], values["legal_person"], values["legal_id"],
+            account_id, values["license_name"], values["credit_code"], values["legal_person"],
+            values["legal_id"], values["legal_phone"],
             values["biz_status"], values["tax_status"], values["items"], values["unit_price"], values["quantity"],
             values["revenue"], values["cost"], values["profit"], values["status"], values["completed_at"],
             values["remark"], position,
@@ -2064,6 +2083,7 @@ class App(BaseHTTPRequestHandler):
                     """
                     UPDATE account_items
                        SET license_name = %s, credit_code = %s, legal_person = %s, legal_id = %s,
+                           legal_phone = %s,
                            biz_status = %s, tax_status = %s, items = %s, unit_price = %s, quantity = %s,
                            revenue = %s, cost = %s, profit = %s, status = %s, completed_at = %s,
                            remark = %s, sort = %s
@@ -2071,6 +2091,7 @@ class App(BaseHTTPRequestHandler):
                     """,
                     (
                         values["license_name"], values["credit_code"], values["legal_person"], values["legal_id"],
+                        values["legal_phone"],
                         values["biz_status"], values["tax_status"], values["items"], values["unit_price"],
                         values["quantity"], values["revenue"], values["cost"], values["profit"],
                         values["status"], values["completed_at"], values["remark"], position, item_id,
@@ -2246,9 +2267,9 @@ class App(BaseHTTPRequestHandler):
                 "(a.client ILIKE %s OR a.phone ILIKE %s OR a.order_no ILIKE %s"
                 " OR a.platform_order_no ILIKE %s"
                 " OR i.items ILIKE %s OR i.license_name ILIKE %s"
-                " OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s)"
+                " OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s OR i.legal_phone ILIKE %s)"
             )
-            params.extend(["%" + keyword + "%"] * 8)
+            params.extend(["%" + keyword + "%"] * 9)
         if query.get("status"):
             where.append("i.status = %s")
             params.append(query["status"])

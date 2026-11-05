@@ -388,12 +388,12 @@
               </el-col>
             </el-row>
             <el-row :gutter="16">
-              <el-col :span="12">
+              <el-col :span="8">
                 <el-form-item label="法人姓名">
                   <el-input v-model="detail.legal_person" placeholder="法定代表人姓名" clearable />
                 </el-form-item>
               </el-col>
-              <el-col :span="12">
+              <el-col :span="8">
                 <el-form-item
                   label="法人身份证号"
                   :prop="'details.' + index + '.legal_id'"
@@ -405,6 +405,20 @@
                     placeholder="18 位身份证号"
                     clearable
                     @input="detail.legal_id = (detail.legal_id || '').toUpperCase()"
+                  />
+                </el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item
+                  label="法人手机号"
+                  :prop="'details.' + index + '.legal_phone'"
+                  :rules="detailRules.legal_phone"
+                >
+                  <el-input
+                    v-model="detail.legal_phone"
+                    placeholder="11 位手机号"
+                    clearable
+                    @input="detail.legal_phone = normalizePhone(detail.legal_phone)"
                   />
                 </el-form-item>
               </el-col>
@@ -643,6 +657,9 @@ export default {
         ],
         legal_id: [
           { validator: optionalPattern(ID_CARD_RE, '身份证号为 18 位，最后一位可为 X'), trigger: 'blur' }
+        ],
+        legal_phone: [
+          { validator: optionalPattern(PHONE_RE, '法人手机号为 11 位数字'), trigger: 'blur' }
         ]
       }
     }
@@ -762,6 +779,7 @@ export default {
         credit_code: '',
         legal_person: '',
         legal_id: '',
+        legal_phone: '',
         biz_status: '',
         tax_status: '',
         items: '',
@@ -868,6 +886,7 @@ export default {
         credit_code: item.credit_code,
         legal_person: item.legal_person,
         legal_id: item.legal_id,
+        legal_phone: item.legal_phone || '',
         biz_status: item.biz_status,
         tax_status: item.tax_status,
         items: item.items,
@@ -936,6 +955,7 @@ export default {
           credit_code: (detail.credit_code || '').toUpperCase(),
           legal_person: (detail.legal_person || '').trim(),
           legal_id: (detail.legal_id || '').toUpperCase(),
+          legal_phone: this.normalizePhone(detail.legal_phone),
           biz_status: detail.biz_status || '',
           tax_status: detail.tax_status || '',
           items: joinItems(detail.item_list) || (detail.items || '').trim(),
@@ -1045,6 +1065,12 @@ export default {
         .filter(value => value !== null)
       if (!values.length) return null
       return values.reduce((sum, value) => sum + value, 0)
+    },
+    // 手机号只留数字：粘贴「+86 138 0013 8000」这种整串也能一步收拾干净
+    normalizePhone(value) {
+      let digits = String(value || '').replace(/\D/g, '')
+      if (digits.length > 11 && digits.indexOf('86') === 0) digits = digits.slice(2)
+      return digits.slice(0, 11)
     },
     numberOrNull(value) {
       if (value === null || value === undefined || value === '') return null

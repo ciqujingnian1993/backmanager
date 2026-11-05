@@ -2,7 +2,7 @@
   <el-dialog
     title="订单详情"
     :visible="visible"
-    width="760px"
+    width="820px"
     top="6vh"
     append-to-body
     @close="$emit('update:visible', false)"
@@ -32,13 +32,17 @@
             <span class="detail-label">统一信用编码</span>
             <span class="detail-value">{{ item.credit_code || '—' }}</span>
           </div>
-          <div class="license-cell">
+          <div class="license-cell third">
             <span class="detail-label">法人姓名</span>
             <span class="detail-value">{{ item.legal_person || '—' }}</span>
           </div>
-          <div class="license-cell">
+          <div class="license-cell third">
             <span class="detail-label">法人身份证号</span>
             <span class="detail-value">{{ item.legal_id || '—' }}</span>
+          </div>
+          <div class="license-cell third">
+            <span class="detail-label">法人手机号</span>
+            <span class="detail-value">{{ item.legal_phone || '—' }}</span>
           </div>
           <div class="license-cell">
             <span class="detail-label">工商状态</span>
@@ -318,6 +322,15 @@ export default {
 
     &.full {
       width: 100%;
+    }
+
+    /* 执照信息首行：法人姓名 / 身份证号 / 手机号 三栏并排 */
+    &.third {
+      width: 33.333%;
+
+      .detail-label {
+        width: 88px;
+      }
     }
 
     .detail-label {
