@@ -1034,6 +1034,10 @@ def init_db():
         """
         ALTER TABLE account_items ADD COLUMN IF NOT EXISTS legal_phone text
         """,
+        # 行业叫法统一：「同行业」→「同行」，老订单一起改名，报表按行业分组才不会裂成两类
+        """
+        UPDATE account_records SET category = '同行' WHERE category = '同行业'
+        """,
     ]
     with connect() as conn:
         with conn.cursor() as cur:

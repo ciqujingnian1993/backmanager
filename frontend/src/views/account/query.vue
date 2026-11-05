@@ -175,7 +175,7 @@ const STATUS_MAP = {
   done: '已完成'
 }
 
-const CATEGORY_OPTIONS = ['同行业', '代理记账', '工商注册', '变更注销']
+const CATEGORY_OPTIONS = ['同行', '代理记账', '工商注册', '变更注销']
 const DRILL_KEYS = ['status', 'category', 'biz_status', 'tax_status', 'platform', 'keyword', 'id']
 
 export default {

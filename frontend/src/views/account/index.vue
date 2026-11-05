@@ -623,7 +623,7 @@ export default {
         profit: 0,
         pending: 0
       },
-      categoryOptions: ['同行业', '代理记账', '工商注册', '变更注销'],
+      categoryOptions: ['同行', '代理记账', '工商注册', '变更注销'],
       platformOptions: [],
       bizItemOptions: [],
       bizStatusOptions: BIZ_STATUS_OPTIONS,
