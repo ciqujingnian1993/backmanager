@@ -397,22 +397,19 @@
               </el-col>
             </el-row>
             <el-row :gutter="16">
-              <el-col :span="12">
+              <el-col :span="16">
                 <el-form-item label="工商状态">
-                  <el-select
+                  <!-- 注意：el-checkbox-group 的 change 回传的是未更新的旧值，这里必须用 input -->
+                  <el-checkbox-group
                     :value="splitBizStatus(detail.biz_status)"
-                    multiple
-                    collapse-tags
-                    style="width: 100%"
-                    clearable
-                    placeholder="可多选，如：正常 + 另册管理"
-                    @change="values => setBizStatus(detail, values)"
+                    class="biz-status-group"
+                    @input="values => setBizStatus(detail, values)"
                   >
-                    <el-option v-for="item in bizStatusOptions" :key="item" :label="item" :value="item" />
-                  </el-select>
+                    <el-checkbox v-for="item in bizStatusOptions" :key="item" :label="item">{{ item }}</el-checkbox>
+                  </el-checkbox-group>
                 </el-form-item>
               </el-col>
-              <el-col :span="12">
+              <el-col :span="8">
                 <el-form-item label="税务状态">
                   <el-select v-model="detail.tax_status" style="width: 100%" clearable placeholder="可不选">
                     <el-option v-for="item in taxStatusOptions" :key="item" :label="item" :value="item" />
@@ -675,7 +672,17 @@ export default {
     bizStatusText,
     // 工商状态多选：下拉里用数组，提交时拼回「正常,另册管理」
     setBizStatus(detail, values) {
-      detail.biz_status = joinBizStatus(values)
+      const prev = splitBizStatus(detail.biz_status)
+      const picked = Array.isArray(values) ? values.slice() : []
+      let next = picked
+      if (picked.indexOf('正常') !== -1 && prev.indexOf('正常') === -1) {
+        // 本次勾的是「正常」：清掉其它异常状态，只留正常
+        next = ['正常']
+      } else if (picked.length > 1) {
+        // 勾了异常状态：把「正常」摘掉，两者互斥
+        next = picked.filter(item => item !== '正常')
+      }
+      detail.biz_status = joinBizStatus(next)
     },
     // 从其它菜单切回本页时（keep-alive 还原）静默刷新，保证看到最新数据
     refreshPage() {
@@ -1462,6 +1469,29 @@ export default {
     font-size: 12px;
     color: #909399;
     line-height: 18px;
+  }
+
+  /* 工商状态平铺勾选：5 项全部展开，不再折叠成「+N」；窄屏自动换行 */
+  .biz-status-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 2px;
+
+    ::v-deep .el-checkbox {
+      margin-right: 18px;
+      margin-left: 0;
+      font-weight: normal;
+    }
+
+    ::v-deep .el-checkbox + .el-checkbox {
+      margin-left: 0;
+    }
+
+    ::v-deep .el-checkbox__label {
+      padding-left: 6px;
+      font-size: 13px;
+    }
   }
 }
 

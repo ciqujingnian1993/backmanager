@@ -111,6 +111,9 @@ def normalize_multi_status(value, allowed):
     # 已知取值排前面并保持固定顺序，历史遗留的自定义值原样跟在后面
     ordered = [item for item in allowed if item in picked]
     ordered.extend(item for item in picked if item not in allowed)
+    # 工商状态的「正常」与各类异常互斥：同时出现时以异常为准（正常只是默认态）
+    if len(ordered) > 1 and "正常" in ordered and allowed is BIZ_STATUSES:
+        ordered = [item for item in ordered if item != "正常"]
     return ",".join(ordered)
 
 COST_CATEGORIES = ["采购", "物流", "人工", "房租", "水电", "推广", "差旅", "办公", "其他"]
