@@ -32,7 +32,7 @@ ARTICLE_FIELDS = [
 
 ACCOUNT_FIELDS = [
     "timestamp", "biz_date", "category", "client", "phone", "platform", "items", "unit_price", "quantity",
-    "revenue", "cost", "profit", "status", "remark", "creator",
+    "revenue", "cost", "profit", "status", "remark", "creator", "platform_order_no",
     "license_name", "credit_code", "legal_person", "legal_id",
 ]
 
@@ -584,6 +584,7 @@ def account_out(row, details=None):
     record = {
         "id": row["id"],
         "order_no": row.get("order_no") or "",
+        "platform_order_no": row.get("platform_order_no") or "",
         "timestamp": int(row["timestamp"] or 0),
         "biz_date": row["biz_date"] or "",
         "category": row["category"] or "",
@@ -1013,6 +1014,10 @@ def init_db():
         """
         CREATE UNIQUE INDEX IF NOT EXISTS account_records_order_no_uidx
         ON account_records (order_no)
+        """,
+        # 平台订单编号：人工填写的第三方渠道单号，可空
+        """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS platform_order_no text DEFAULT ''
         """,
     ]
     with connect() as conn:
@@ -1823,12 +1828,12 @@ class App(BaseHTTPRequestHandler):
             keyword = "%" + query["keyword"] + "%"
             where.append(
                 "(a.client ILIKE %s OR a.items ILIKE %s OR a.category ILIKE %s OR a.remark ILIKE %s"
-                " OR a.phone ILIKE %s OR a.order_no ILIKE %s"
+                " OR a.phone ILIKE %s OR a.order_no ILIKE %s OR a.platform_order_no ILIKE %s"
                 " OR EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND ("
                 " i.license_name ILIKE %s OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s"
                 " OR i.items ILIKE %s)))"
             )
-            params.extend([keyword] * 10)
+            params.extend([keyword] * 11)
         if query.get("status"):
             where.append("a.status = %s")
             params.append(query["status"])
@@ -1956,6 +1961,7 @@ class App(BaseHTTPRequestHandler):
             "status": pick("status", "pending") or "pending",
             "completed_at": None,
             "remark": pick("remark"),
+            "platform_order_no": (pick("platform_order_no") or "").strip(),
             "creator": pick("creator") or (user["username"] if user else ""),
             "license_name": (first.get("license_name") or "").strip() or (pick("license_name") or "").strip(),
             "credit_code": ((first.get("credit_code") or "").strip() or (pick("credit_code") or "")).strip().upper(),
@@ -2238,10 +2244,11 @@ class App(BaseHTTPRequestHandler):
         if keyword:
             where.append(
                 "(a.client ILIKE %s OR a.phone ILIKE %s OR a.order_no ILIKE %s"
+                " OR a.platform_order_no ILIKE %s"
                 " OR i.items ILIKE %s OR i.license_name ILIKE %s"
                 " OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s)"
             )
-            params.extend(["%" + keyword + "%"] * 7)
+            params.extend(["%" + keyword + "%"] * 8)
         if query.get("status"):
             where.append("i.status = %s")
             params.append(query["status"])

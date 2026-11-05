@@ -147,6 +147,7 @@ export default {
       const row = this.row || {}
       return [
         { label: '订单编号', value: row.order_no || '—' },
+        { label: '平台订单编号', value: row.platform_order_no || '—' },
         { label: '业务日期', value: row.biz_date || '—' },
         { label: '行业', value: row.category || '—' },
         { label: '客户', value: row.client || '—' },
