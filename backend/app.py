@@ -34,7 +34,32 @@ ACCOUNT_FIELDS = [
     "timestamp", "biz_date", "category", "client", "phone", "platform", "items", "unit_price", "quantity",
     "revenue", "cost", "profit", "status", "remark", "creator", "platform_order_no",
     "license_name", "credit_code", "legal_person", "legal_id",
+    "id_photos",
 ]
+
+
+def normalize_photos(raw):
+    """身份证 / 执照照片列表统一成 [{url, name, size}]，最多 20 张，脏数据直接丢。"""
+    if not isinstance(raw, list):
+        return []
+    photos = []
+    for item in raw:
+        if isinstance(item, str):
+            if item.strip():
+                photos.append({"url": item.strip(), "name": "", "size": 0})
+        elif isinstance(item, dict):
+            url = str(item.get("url") or "").strip()
+            if url:
+                try:
+                    size = int(item.get("size") or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                photos.append({
+                    "url": url,
+                    "name": str(item.get("name") or "")[:120],
+                    "size": size,
+                })
+    return photos[:20]
 
 COST_FIELDS = [
     "timestamp", "biz_date", "category", "payee", "amount", "method", "related_order",
@@ -120,6 +145,19 @@ COST_CATEGORIES = ["采购", "物流", "人工", "房租", "水电", "推广", "
 
 PROGRESS_STATUS = ("pending", "doing", "done", "blocked")
 
+# 任务（执照明细）状态：在原有 待定/进行中/已完成 之外，增加 取消订单 / 已退款
+ITEM_STATUSES = ("pending", "doing", "done", "cancelled", "refunded")
+# 关单状态：不再计为进行中，订单级状态回算时按它们判断整单是否已取消/已退款
+CLOSED_ITEM_STATUSES = ("done", "cancelled", "refunded")
+ITEM_STATUS_LABELS = {
+    "pending": "待定",
+    "doing": "进行中",
+    "done": "已完成",
+    "cancelled": "取消订单",
+    "refunded": "已退款",
+}
+
+
 
 def biz_month_key(biz_date, fallback=None):
     """把各种写法的业务日期（2026-10-29 / 10/29 / 2026年10月29日）归一到 YYYY-MM。"""
@@ -149,6 +187,19 @@ def shift_month(base, offset):
     year = base.year + (base.month - 1 + offset) // 12
     month = (base.month - 1 + offset) % 12 + 1
     return datetime(year, month, 1)
+
+
+def ms_month_key(stamp):
+    """毫秒时间戳归到 YYYY-MM：订单哪个月办结，收入就算哪个月。"""
+    try:
+        value = float(stamp or 0)
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0:
+        return ""
+    if value > 1e11:
+        value = value / 1000.0
+    return datetime.fromtimestamp(value).strftime("%Y-%m")
 
 
 class UploadedFile:
@@ -508,7 +559,18 @@ def item_out(row):
         "created_at": int(created.timestamp() * 1000) if created else None,
         "remark": row.get("remark") or "",
         "sort": int(row.get("sort") or 0),
-        "is_delete": int(row.get("is_delete") or 0),
+        # 执照照片（随执照明细存，编辑订单时可补传）
+        "license_photos": normalize_photos(row.get("license_photos")),
+        # 主跟进人（username）；为空表示还没指定，展示时按跟进记录推断
+        "owner": row.get("owner") or "",
+        "owner_updated_at": int(row["owner_updated_at"]) if row.get("owner_updated_at") else None,
+        # 退款：累计退款金额 + 最近一次退款时间，前端用来展示「已退款 / 部分退款」
+        "refund_amount": float(row.get("refund_amount") or 0),
+        "refund_at": int(row["refund_at"]) if row.get("refund_at") else None,
+        # 取消订单：原因 / 备注 / 取消时间
+        "cancel_reason": row.get("cancel_reason") or "",
+        "cancel_note": row.get("cancel_note") or "",
+        "cancelled_at": int(row["cancelled_at"]) if row.get("cancelled_at") else None,
     }
 
 
@@ -519,7 +581,7 @@ def progress_snapshot(cur, item_ids):
         return {}
     cur.execute(
         "SELECT item_id, step, status, timestamp FROM order_progress"
-        " WHERE item_id = ANY(%s) AND is_delete = 0 ORDER BY timestamp DESC, id DESC",
+        " WHERE item_id = ANY(%s) ORDER BY timestamp DESC, id DESC",
         (ids,),
     )
     raw = {}
@@ -576,17 +638,28 @@ def fetch_details(cur, account_ids):
     if not ids:
         return {}
     cur.execute(
-        "SELECT * FROM account_items WHERE account_id = ANY(%s)"
-        " AND is_delete = 0 ORDER BY account_id, sort, id",
+        "SELECT * FROM account_items WHERE account_id = ANY(%s) ORDER BY account_id, sort, id",
         (ids,),
     )
     grouped = {}
     for row in cur.fetchall():
         grouped.setdefault(row["account_id"], []).append(item_out(row))
     snapshot = progress_snapshot(cur, [item["id"] for items in grouped.values() for item in items])
+    # 主跟进人补上显示名/头像，详情页不用再查一次用户表
+    owner_usernames = sorted({
+        item["owner"] for items in grouped.values() for item in items if item.get("owner")
+    })
+    owners = {}
+    if owner_usernames:
+        cur.execute("SELECT username, name, avatar FROM users WHERE username = ANY(%s)", (owner_usernames,))
+        owners = {row["username"]: row for row in cur.fetchall()}
     for items in grouped.values():
         for item in items:
             item["progress"] = snapshot.get(item["id"], None)
+            owner = owners.get(item.get("owner"))
+            if owner:
+                item["owner_name"] = owner["name"] or owner["username"]
+                item["owner_avatar"] = owner["avatar"] or ""
     return grouped
 
 
@@ -596,8 +669,6 @@ def account_out(row, details=None):
         "id": row["id"],
         "order_no": row.get("order_no") or "",
         "platform_order_no": row.get("platform_order_no") or "",
-        "is_delete": int(row.get("is_delete") or 0),
-        "record_status": "deleted" if row.get("is_delete") else "active",
         "timestamp": int(row["timestamp"] or 0),
         "biz_date": row["biz_date"] or "",
         "category": row["category"] or "",
@@ -614,6 +685,8 @@ def account_out(row, details=None):
         "completed_at": int(row["completed_at"]) if row.get("completed_at") else None,
         "remark": row["remark"] or "",
         "creator": row["creator"] or "",
+        # 客户身份证照片（订单层面）
+        "id_photos": normalize_photos(row.get("id_photos")),
         "details": details,
         "license_count": len(details),
         "done_count": len([item for item in details if item["status"] == "done"]),
@@ -646,10 +719,29 @@ def progress_out(row):
         "id": row["id"],
         "account_id": row["account_id"],
         "item_id": row.get("item_id"),
+        "task_id": row.get("task_id"),
         "step": row["step"] or "",
         "status": row["status"] or "doing",
         "note": row["note"] or "",
         "operator": row["operator"] or "",
+        # 跟进人显示名 / 头像（users 表里的 name、avatar，查不到就退回 username）
+        "operator_name": row.get("operator_name") or row["operator"] or "",
+        "operator_avatar": row.get("operator_avatar") or "",
+        "timestamp": int(row["timestamp"] or 0),
+    }
+
+
+def progress_file_out(row):
+    """办理线附件（工商 / 税务线上的图片、单据）。"""
+    return {
+        "id": row["id"],
+        "item_id": row["item_id"],
+        "account_id": row["account_id"],
+        "line": row["line"] or "",
+        "url": row["url"] or "",
+        "name": row["name"] or "",
+        "size": int(row["size"] or 0),
+        "uploader": row["uploader"] or "",
         "timestamp": int(row["timestamp"] or 0),
     }
 
@@ -666,22 +758,25 @@ def cost_out(row):
         "related_order": row["related_order"],
         "remark": row["remark"] or "",
         "creator": row["creator"] or "",
-        # 软删除：is_delete=1 表示「已删除」，数据仍在库里，可恢复
-        "is_delete": int(row.get("is_delete") or 0),
-        "record_status": "deleted" if row.get("is_delete") else "active",
+        # refund = 订单退款自动写入的那条记录（金额已在订单收入里冲减）
+        "kind": row.get("kind") or "",
     }
 
 
-def insert_progress(cur, account_id, step, status, note, operator, stamp=None, item_id=None):
-    """写入一条进度记录。item_id 指向执照明细（任务），为空表示订单级进度。"""
+def insert_progress(cur, account_id, step, status, note, operator, stamp=None, item_id=None, task_id=None):
+    """写入一条进度记录。
+
+    item_id 指向执照明细（主任务），task_id 指向细分任务；
+    细分任务的时间线只认 task_id，主任务级系统记录（已录入/状态变更等）不带 task_id。
+    """
     if status not in PROGRESS_STATUS:
         status = "doing"
     cur.execute(
         """
-        INSERT INTO order_progress (account_id, item_id, step, status, note, operator, timestamp)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO order_progress (account_id, item_id, task_id, step, status, note, operator, timestamp)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (account_id, item_id, step, status, note or "", operator or "", stamp or now_ms()),
+        (account_id, item_id, task_id, step, status, note or "", operator or "", stamp or now_ms()),
     )
 
 
@@ -701,7 +796,15 @@ def auto_progress(cur, record, operator, item_id=None, detail=None):
 
 
 def recalc_order(cur, account_id):
-    """按执照明细回算订单级金额与状态：全完成=已完成，有推进=进行中。"""
+    """按执照明细回算订单级金额与状态。
+
+    订单是否完成只取决于「还需要办的执照」：已取消的执照不要求办结，
+    其余执照全部办结，整单就算完成——只有这种情况收入才计入总收入。
+    全部取消=取消订单，全部退款=已退款，有推进=进行中。"""
+    # 先锁住订单行再聚合：前端一次提交多条进度线时是并发请求，两个事务各算一遍，
+    # 后算的那个如果读到的是旧明细状态，会把订单状态写回旧值（丢更新）。
+    # 锁住订单行后，后到的事务会等前一个提交完再读，聚合结果一定是最新的。
+    cur.execute("SELECT id FROM account_records WHERE id = %s FOR UPDATE", (account_id,))
     cur.execute(
         """
         SELECT COUNT(*) AS cnt,
@@ -709,20 +812,35 @@ def recalc_order(cur, account_id):
                SUM(cost) AS cost,
                SUM(profit) AS profit,
                COUNT(*) FILTER (WHERE status = 'done') AS done,
+               COUNT(*) FILTER (WHERE status = 'refunded') AS refunded,
+               COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled,
                COUNT(*) FILTER (WHERE status IN ('doing', 'done')) AS active,
-               MAX(completed_at) FILTER (WHERE status = 'done') AS completed_at,
+               MAX(completed_at) FILTER (WHERE status IN ('done', 'cancelled', 'refunded')) AS completed_at,
                string_agg(DISTINCT NULLIF(items, ''), '、') AS items
           FROM account_items
-         WHERE account_id = %s AND is_delete = 0
+         WHERE account_id = %s
         """,
         (account_id,),
     )
     row = cur.fetchone()
     count = int(row["cnt"] or 0)
     done = int(row["done"] or 0)
+    refunded = int(row["refunded"] or 0)
+    cancelled = int(row["cancelled"] or 0)
     active = int(row["active"] or 0)
-    if count and done == count:
+    # 还要办结的执照数：取消掉的执照不用做，不阻塞整单完成
+    waiting = count - cancelled
+    if count and waiting == 0:
+        # 执照全被取消了：整单跟着取消，有退款就按已退款记
+        status = "refunded" if refunded else "cancelled"
+        completed_at = row["completed_at"]
+    elif count and done == waiting:
+        # 需要办的执照全部办结 → 订单完成，收入才计入总收入
         status = "done"
+        completed_at = row["completed_at"]
+    elif count and refunded and (done + refunded) == waiting:
+        # 剩下的都退款关单了：整单按「已退款」记，方便按状态筛出退款单
+        status = "refunded"
         completed_at = row["completed_at"]
     elif active:
         status = "doing"
@@ -741,6 +859,142 @@ def recalc_order(cur, account_id):
     )
 
 
+def repair_order_statuses(conn):
+    """兜底修复：订单状态以明细为准。
+
+    历史上并发写进度时出现过「明细已经全部完成、订单还挂在进行中」的丢更新，
+    启动时把这类对不上的订单重算一遍；只处理不一致的，正常订单不写库。
+    """
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # 细分任务全被取消、执照还挂在待办状态：随单取消，免得整单被堵在「进行中」
+        cur.execute(
+            """
+            UPDATE account_items i
+               SET status = 'cancelled',
+                   completed_at = NULL,
+                   cancelled_at = COALESCE(i.cancelled_at, (extract(epoch from now()) * 1000)::bigint)
+             WHERE i.status IN ('pending', 'doing', 'done')
+               AND EXISTS (SELECT 1 FROM account_item_tasks t WHERE t.item_id = i.id)
+               AND NOT EXISTS (
+                   SELECT 1 FROM account_item_tasks t
+                    WHERE t.item_id = i.id AND t.status <> 'cancelled'
+               )
+            RETURNING i.id
+            """
+        )
+        items_fixed = [row["id"] for row in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT a.id
+              FROM account_records a
+              JOIN account_items i ON i.account_id = a.id
+             GROUP BY a.id, a.status
+            HAVING a.status <> CASE
+                     WHEN COUNT(*) FILTER (WHERE i.status <> 'cancelled') = 0
+                          THEN CASE WHEN COUNT(*) FILTER (WHERE i.status = 'refunded') > 0
+                                    THEN 'refunded' ELSE 'cancelled' END
+                     WHEN COUNT(*) FILTER (WHERE i.status = 'done')
+                          = COUNT(*) FILTER (WHERE i.status <> 'cancelled') THEN 'done'
+                     WHEN COUNT(*) FILTER (WHERE i.status IN ('done', 'refunded'))
+                          = COUNT(*) FILTER (WHERE i.status <> 'cancelled')
+                          AND COUNT(*) FILTER (WHERE i.status = 'refunded') > 0 THEN 'refunded'
+                     WHEN COUNT(*) FILTER (WHERE i.status IN ('doing', 'done')) > 0 THEN 'doing'
+                     ELSE 'pending'
+                   END
+            """
+        )
+        fixed = [row["id"] for row in cur.fetchall()]
+        for account_id in fixed:
+            recalc_order(cur, account_id)
+    if items_fixed:
+        print("[startup] 细分任务全取消、执照随单取消：%s" % ", ".join(str(item) for item in items_fixed), flush=True)
+    if fixed:
+        print("[startup] 修正订单状态不一致：%s" % ", ".join(str(item) for item in fixed), flush=True)
+
+
+def refund_item_line(cur, item, amount, stamp):
+    """把一条任务的收入冲减 amount（退款），返回 (退款后金额, 退款后状态)。"""
+    revenue = float(item.get("revenue") or 0)
+    cost = float(item.get("cost") or 0)
+    new_revenue = round(max(0.0, revenue - amount), 2)
+    full = new_revenue <= 0.004
+    status = item.get("status") or "pending"
+    new_status = "refunded" if full else (status if status in ("doing", "done") else "doing")
+    completed_at = stamp if full else item.get("completed_at")
+    cur.execute(
+        """
+        UPDATE account_items
+           SET revenue = %s, profit = %s, status = %s, completed_at = %s,
+               refund_amount = COALESCE(refund_amount, 0) + %s, refund_at = %s
+         WHERE id = %s
+        """,
+        (new_revenue, round(new_revenue - cost, 2), new_status, completed_at, amount, stamp, item["id"]),
+    )
+    # 全额退款等同于这条任务办不下去了，细分任务一起标记取消（已办结的保留）
+    if full:
+        cur.execute(
+            "UPDATE account_item_tasks SET status = 'cancelled', updated_at = %s"
+            " WHERE item_id = %s AND status <> 'done'",
+            (stamp, item["id"]),
+        )
+    return new_revenue, new_status
+
+
+def cancel_item_line(cur, item, stamp, reason, remark, clear_amount):
+    """把一条任务标成「取消订单」，返回 (取消前金额, 取消后金额)。"""
+    revenue = float(item.get("revenue") or 0)
+    cost = float(item.get("cost") or 0)
+    new_revenue = 0.0 if clear_amount else revenue
+    cur.execute(
+        """
+        UPDATE account_items
+           SET status = 'cancelled', completed_at = %s, cancelled_at = %s,
+               cancel_reason = %s, cancel_note = %s, revenue = %s, profit = %s
+         WHERE id = %s
+        """,
+        (stamp, stamp, reason, remark, new_revenue, round(new_revenue - cost, 2), item["id"]),
+    )
+    # 取消订单：没办结的细分任务一起取消，展开后不会还挂着「未开始」
+    cur.execute(
+        "UPDATE account_item_tasks SET status = 'cancelled', updated_at = %s"
+        " WHERE item_id = %s AND status <> 'done'",
+        (stamp, item["id"]),
+    )
+    return revenue, new_revenue
+
+
+def split_refund_amount(items, amount):
+    """把一笔退款金额按顺序分摊到若干任务上，返回 [(任务, 分摊金额)]。
+
+    先可着前面的任务退，退不完再退下一条；分到最后差几分钱时补到已分摊的那几笔上，
+    保证「分摊总额 == 本次退款金额」，不会在成本账上留下几分钱的对不上。
+    """
+    shares = []
+    left = round(float(amount), 2)
+    for item in items:
+        if left <= 0.004:
+            break
+        revenue = round(float(item.get("revenue") or 0), 2)
+        if revenue <= 0.004:
+            continue
+        take = round(min(revenue, left), 2)
+        shares.append([item, take])
+        left = round(left - take, 2)
+    if shares and left > 0.004:
+        # 兜底：残差补到还没退满的那一条上，仍然不能超过该任务当前金额
+        for pair in reversed(shares):
+            revenue = round(float(pair[0].get("revenue") or 0), 2)
+            room = round(revenue - pair[1], 2)
+            if room <= 0.004:
+                continue
+            extra = min(room, left)
+            pair[1] = round(pair[1] + extra, 2)
+            left = round(left - extra, 2)
+            if left <= 0.004:
+                break
+    return [(item, take) for item, take in shares]
+
+
 def migrate_account_items(cur):
     """把历史「一单一执照」的数据迁移成明细：每个老订单补一条明细，进度挂到该明细上。"""
     cur.execute(
@@ -753,7 +1007,7 @@ def migrate_account_items(cur):
                a.unit_price, a.quantity, a.revenue, a.cost, a.profit,
                COALESCE(a.status, 'pending'), a.completed_at, a.remark, 0, a.created_at
           FROM account_records a
-         WHERE NOT EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND i.is_delete = 0)
+         WHERE NOT EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id)
            AND (COALESCE(a.client, '') <> '' OR COALESCE(a.items, '') <> ''
                 OR COALESCE(a.license_name, '') <> '' OR a.revenue IS NOT NULL)
         """
@@ -772,8 +1026,7 @@ def migrate_account_items(cur):
         """
         UPDATE order_progress p
            SET item_id = sub.id
-          FROM (SELECT account_id, MIN(id) AS id FROM account_items
-                 WHERE is_delete = 0 GROUP BY account_id) sub
+          FROM (SELECT account_id, MIN(id) AS id FROM account_items GROUP BY account_id) sub
          WHERE p.account_id = sub.account_id AND p.item_id IS NULL
         """
     )
@@ -948,6 +1201,10 @@ def init_db():
         CREATE INDEX IF NOT EXISTS order_progress_account_idx
         ON order_progress (account_id, timestamp DESC)
         """,
+        # 跟进记录挂到具体细分任务上：主任务不再有独立时间线，每条记录跟着子任务走
+        """
+        ALTER TABLE order_progress ADD COLUMN IF NOT EXISTS task_id integer
+        """,
         """
         CREATE TABLE IF NOT EXISTS cost_records (
             id serial PRIMARY KEY,
@@ -1000,6 +1257,33 @@ def init_db():
             created_at timestamptz NOT NULL DEFAULT now()
         )
         """,
+        # 价格配置：代办服务价目表，一行 = 一个服务项目（类别 + 适用条件 + 标准价 + 同行参考价）
+        """
+        CREATE TABLE IF NOT EXISTS price_items (
+            id serial PRIMARY KEY,
+            category text NOT NULL DEFAULT '',
+            name text NOT NULL,
+            condition text DEFAULT '',
+            price numeric NOT NULL DEFAULT 0,
+            peer_price numeric NOT NULL DEFAULT 0,
+            remark text DEFAULT '',
+            sort integer NOT NULL DEFAULT 0,
+            active boolean NOT NULL DEFAULT true,
+            updated_at timestamptz,
+            created_at timestamptz NOT NULL DEFAULT now()
+        )
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS price_items_name_uidx ON price_items (name)
+        """,
+        # 价目表的说明文案（免责声明、特别提醒），跟具体项目分开存，可随时改
+        """
+        CREATE TABLE IF NOT EXISTS price_settings (
+            key text PRIMARY KEY,
+            value text DEFAULT '',
+            updated_at timestamptz
+        )
+        """,
         # 税务状态文案调整：有税务 → 税务正常，历史数据一并归一
         """
         UPDATE account_items SET tax_status = '税务正常' WHERE tax_status = '有税务'
@@ -1042,35 +1326,108 @@ def init_db():
         """
         ALTER TABLE account_items ADD COLUMN IF NOT EXISTS legal_phone text
         """,
+        # 主跟进人：任务（执照明细）的第一责任人，留空时按跟进记录自动推断
+        """
+        ALTER TABLE account_items ADD COLUMN IF NOT EXISTS owner text
+        """,
+        """
+        ALTER TABLE account_items ADD COLUMN IF NOT EXISTS owner_updated_at bigint
+        """,
+        # 取消订单：记下取消原因、补充备注与取消时间，方便复盘和区分责任
+        """
+        ALTER TABLE account_items ADD COLUMN IF NOT EXISTS cancel_reason text DEFAULT ''
+        """,
+        """
+        ALTER TABLE account_items ADD COLUMN IF NOT EXISTS cancel_note text DEFAULT ''
+        """,
+        """
+        ALTER TABLE account_items ADD COLUMN IF NOT EXISTS cancelled_at bigint
+        """,
+        # 退款：累计退款金额与最近退款时间，收入在明细 revenue 上直接冲减
+        """
+        ALTER TABLE account_items ADD COLUMN IF NOT EXISTS refund_amount numeric DEFAULT 0
+        """,
+        """
+        ALTER TABLE account_items ADD COLUMN IF NOT EXISTS refund_at bigint
+        """,
+        # 成本记录来源：kind='refund' 是订单退款自动生成的那条，
+        # 它的金额已经在收入里冲减过，财务报表统计利润时不再重复计入支出
+        """
+        ALTER TABLE cost_records ADD COLUMN IF NOT EXISTS kind text DEFAULT ''
+        """,
+        # 订单的身份证照片 / 执照的执照照片：随订单一起存，录入和编辑时都能传
+        """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS id_photos jsonb DEFAULT '[]'::jsonb
+        """,
+        """
+        ALTER TABLE account_items ADD COLUMN IF NOT EXISTS license_photos jsonb DEFAULT '[]'::jsonb
+        """,
         # 行业叫法统一：「同行业」→「同行」，老订单一起改名，报表按行业分组才不会裂成两类
         """
         UPDATE account_records SET category = '同行' WHERE category = '同行业'
         """,
-        # 软删除：is_delete=0 正常 / 1 已删除，所有业务数据只标记不物理删除，误删也能从库里恢复
+        # 办理线附件：工商 / 税务每条线可上传图片（受理单、执照照片、办结截图等）
         """
-        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS is_delete smallint NOT NULL DEFAULT 0
+        CREATE TABLE IF NOT EXISTS progress_files (
+            id serial PRIMARY KEY,
+            item_id integer NOT NULL,
+            account_id integer NOT NULL,
+            line text NOT NULL DEFAULT '',
+            url text NOT NULL,
+            name text DEFAULT '',
+            size bigint DEFAULT 0,
+            uploader text DEFAULT '',
+            timestamp bigint
+        )
         """,
         """
-        ALTER TABLE account_items ADD COLUMN IF NOT EXISTS is_delete smallint NOT NULL DEFAULT 0
+        CREATE INDEX IF NOT EXISTS progress_files_item_idx ON progress_files (item_id, line)
+        """,
+        # 细分任务：一个执照（主任务）按业务项再拆一层，「工商注销」「税务非正常解除」各自独立办结；
+        # 主任务行只看整单状态，展开后才看这些细分任务，互不干扰
+        """
+        CREATE TABLE IF NOT EXISTS account_item_tasks (
+            id serial PRIMARY KEY,
+            item_id integer NOT NULL REFERENCES account_items(id) ON DELETE CASCADE,
+            account_id integer NOT NULL REFERENCES account_records(id) ON DELETE CASCADE,
+            name text NOT NULL,
+            line text NOT NULL DEFAULT 'other',
+            status text NOT NULL DEFAULT 'pending',
+            owner text DEFAULT '',
+            note text DEFAULT '',
+            done_at bigint,
+            updated_at bigint,
+            sort integer NOT NULL DEFAULT 0,
+            -- 来源：item = 由业务项自动拆出来的（业务项改了会跟着同步），manual = 手工补的事项
+            source text NOT NULL DEFAULT 'item',
+            created_at timestamptz NOT NULL DEFAULT now()
+        )
         """,
         """
-        ALTER TABLE order_progress ADD COLUMN IF NOT EXISTS is_delete smallint NOT NULL DEFAULT 0
+        ALTER TABLE account_item_tasks ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'item'
         """,
         """
-        ALTER TABLE cost_records ADD COLUMN IF NOT EXISTS is_delete smallint NOT NULL DEFAULT 0
-        """,
-        # 给状态列写注释，库里直接能看出含义
-        """
-        COMMENT ON COLUMN account_records.is_delete IS '软删除标记：0=正常，1=已删除'
+        CREATE INDEX IF NOT EXISTS account_item_tasks_item_idx
+        ON account_item_tasks (item_id, sort, id)
         """,
         """
-        COMMENT ON COLUMN account_items.is_delete IS '软删除标记：0=正常，1=已删除'
+        CREATE INDEX IF NOT EXISTS account_item_tasks_account_idx
+        ON account_item_tasks (account_id)
+        """,
+        # 跟进记录 → 细分任务的外键（account_item_tasks 建好之后才能加）
+        """
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'order_progress_task_fk') THEN
+                ALTER TABLE order_progress
+                ADD CONSTRAINT order_progress_task_fk
+                FOREIGN KEY (task_id) REFERENCES account_item_tasks(id) ON DELETE SET NULL;
+            END IF;
+        END $$
         """,
         """
-        COMMENT ON COLUMN order_progress.is_delete IS '软删除标记：0=正常，1=已删除'
-        """,
-        """
-        COMMENT ON COLUMN cost_records.is_delete IS '软删除标记：0=正常，1=已删除'
+        CREATE INDEX IF NOT EXISTS order_progress_task_idx
+        ON order_progress (task_id, timestamp DESC)
         """,
     ]
     with connect() as conn:
@@ -1081,11 +1438,36 @@ def init_db():
             if cur.fetchone()[0] == 0:
                 seed(cur)
             migrate_account_items(cur)
+            # 子任务单价是后加的：只在第一次加列时按业务项价格回填一次，
+            # 之后用户手工把某项改成 0 不会被启动流程再冲掉
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'account_item_tasks' AND column_name = 'amount'"
+            )
+            if cur.fetchone() is None:
+                cur.execute(
+                    "ALTER TABLE account_item_tasks ADD COLUMN amount numeric(12,2) NOT NULL DEFAULT 0"
+                )
+                cur.execute(
+                    """
+                    UPDATE account_item_tasks t
+                       SET amount = b.unit_price
+                      FROM biz_items b
+                     WHERE t.name = b.name AND b.unit_price > 0
+                    """
+                )
+            backfill_item_tasks(cur)
+            linked = backfill_progress_task_links(cur)
+            if linked:
+                print("[startup] 跟进记录挂到细分任务：%d 条" % linked, flush=True)
             sync_account_route(cur)
             ensure_finance_route(cur)
             seed_menus(cur)
             seed_platforms(cur)
             seed_biz_items(cur)
+            seed_prices(cur)
+        # 订单状态以明细为准，顺手把历史上对不上的订单修正掉
+        repair_order_statuses(conn)
         conn.commit()
 
 
@@ -1095,6 +1477,7 @@ MENU_SEED = [
     ("/account/index", "订单管理", "money", "", 10),
     ("/account/query", "订单查询", "table", "", 20),
     ("/progress/index", "订单进度", "tree", "", 30),
+    ("/price/index", "价格配置", "money", "", 35),
     ("/cost/index", "支出管理", "money", "", 40),
     ("/cost/query", "成本查询", "table", "", 50),
     ("/finance/report", "财务报表", "chart", "", 60),
@@ -1163,10 +1546,7 @@ def split_biz_items(text):
 def seed_biz_items(cur):
     # 预置项 + 历史订单里已经用过的业务项，一起导入字典，升级后立刻可复用
     names = list(BIZ_ITEM_SEED)
-    cur.execute(
-        "SELECT DISTINCT items FROM account_items"
-        " WHERE COALESCE(items, '') <> '' AND is_delete = 0"
-    )
+    cur.execute("SELECT DISTINCT items FROM account_items WHERE COALESCE(items, '') <> ''")
     for row in cur.fetchall():
         for name in split_biz_items(row["items"] if isinstance(row, dict) else row[0]):
             if name not in names:
@@ -1182,8 +1562,300 @@ def seed_biz_items(cur):
         )
 
 
-def seed_menus(cur):
+# 细分任务：执照（主任务）下按业务项拆出来的小任务，各自独立办结
+TASK_STATUS_LABELS = {"pending": "未开始", "doing": "办理中", "done": "已办结", "cancelled": "已取消"}
 
+# 细分任务归属哪条办理线：先判税务再判工商，「税务注销」不能被「注销」抢成工商线
+TASK_LINE_RULES = [
+    ("tax", ("税务", "解非", "非正常", "清税", "记账", "报税", "申报", "发票", "票种",
+             "汇算", "欠税", "有税", "无税", "个税", "社保")),
+    ("biz", ("工商", "执照", "注销", "注册", "变更", "地址", "年报", "刻章", "银行",
+             "股权", "增资", "减资", "经营范围", "另册", "吊销", "挂靠", "虚假")),
+]
+
+
+def task_line_of(name):
+    """业务项 → 办理线（biz / tax / other），只用于列表上打个小标签。"""
+    text = str(name or "")
+    for key, words in TASK_LINE_RULES:
+        if any(word in text for word in words):
+            return key
+    return "other"
+
+
+def task_out(row):
+    return {
+        "id": row["id"],
+        "item_id": row["item_id"],
+        "account_id": row["account_id"],
+        "name": row["name"] or "",
+        "line": row["line"] or "other",
+        "status": row["status"] or "pending",
+        "owner": row["owner"] or "",
+        "note": row["note"] or "",
+        "done_at": int(row["done_at"] or 0),
+        "updated_at": int(row["updated_at"] or 0),
+        "sort": int(row["sort"] or 0),
+        "source": row.get("source") or "item",
+        "amount": float(row.get("amount") or 0),
+    }
+
+
+def fetch_item_tasks(cur, item_ids):
+    """批量取细分任务，按 item_id 分组，列表页一次查完不做 N+1。"""
+    ids = [int(i) for i in item_ids if i]
+    if not ids:
+        return {}
+    cur.execute(
+        "SELECT * FROM account_item_tasks WHERE item_id = ANY(%s) ORDER BY sort, id",
+        (ids,),
+    )
+    grouped = {}
+    for row in cur.fetchall():
+        grouped.setdefault(row["item_id"], []).append(task_out(row))
+    return grouped
+
+
+def sync_item_tasks(cur, item_id, account_id, items_text, status="pending", owner=""):
+    """按业务项同步细分任务：补新增的、删掉业务项已去掉的，已有的保留自己的办理状态。
+
+    主任务标「已完成」时，细分任务一起置为已办结；主任务取消时细分任务跟着取消，
+    改回正常状态时把取消的细分任务恢复成未开始。人工改过的细分任务状态不会被覆盖。
+    """
+    names = split_biz_items(items_text)
+    # 这个方法两种游标下都会跑（启动迁移用普通游标，接口里用 RealDictCursor），
+    # 先统一成元组，后面按位置取值就行
+    cur.execute(
+        "SELECT id, name, sort, source FROM account_item_tasks WHERE item_id = %s ORDER BY sort, id",
+        (item_id,),
+    )
+    existing = {}
+    for row in cur.fetchall():
+        if isinstance(row, dict):
+            row = (row["id"], row["name"], row["sort"], row.get("source"))
+        existing.setdefault(row[1], []).append(row)
+    stamp = now_ms()
+    status = status or "pending"
+    # 业务项自带单价：新建子任务时带过来做默认值，之后可在订单里单独改
+    cur.execute("SELECT name, unit_price FROM biz_items")
+    price_map = {}
+    for row in cur.fetchall():
+        if isinstance(row, dict):
+            price_map[row["name"]] = float(row["unit_price"] or 0)
+        else:
+            price_map[row[0]] = float(row[1] or 0)
+    for index, name in enumerate(names):
+        rows = existing.get(name) or []
+        if rows:
+            row = rows.pop(0)
+            if int(row[2] or 0) != index:
+                cur.execute("UPDATE account_item_tasks SET sort = %s WHERE id = %s", (index, row[0]))
+            continue
+        done = status == "done"
+        cur.execute(
+            """
+            INSERT INTO account_item_tasks
+                   (item_id, account_id, name, line, status, owner, amount, done_at, updated_at, sort)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (item_id, account_id, name, task_line_of(name), "done" if done else "pending",
+             owner or "", price_map.get(name, 0), stamp if done else None, stamp, index),
+        )
+    # 业务项被去掉的细分任务删掉；同名重复的历史行也一起清掉。手工补的事项不受业务项影响
+    removed = [
+        row[0] for rows in existing.values() for row in rows
+        if (row[3] or "item") != "manual"
+    ]
+    if removed:
+        cur.execute("DELETE FROM account_item_tasks WHERE id = ANY(%s)", (removed,))
+    # 主任务状态带着细分任务走：完成 → 全办结；取消 → 全取消；恢复 → 取消的回到未开始
+    if status == "done":
+        cur.execute(
+            "UPDATE account_item_tasks SET status = 'done', done_at = COALESCE(done_at, %s), updated_at = %s"
+            " WHERE item_id = %s AND status <> 'done'",
+            (stamp, stamp, item_id),
+        )
+    elif status == "cancelled":
+        cur.execute(
+            "UPDATE account_item_tasks SET status = 'cancelled', updated_at = %s"
+            " WHERE item_id = %s AND status <> 'done'",
+            (stamp, item_id),
+        )
+    else:
+        cur.execute(
+            "UPDATE account_item_tasks SET status = 'pending', updated_at = %s"
+            " WHERE item_id = %s AND status = 'cancelled'",
+            (stamp, item_id),
+        )
+
+
+def apply_task_overrides(cur, item_id, tasks, operator=""):
+    """把订单表单里逐条改过的子任务状态 / 单价写回去（新建和编辑都走这里）。
+
+    tasks: [{"id": 可选, "name": "工商注销", "status": "done", "amount": 300, "owner": "张三"}]
+    只处理能对上的名字，业务项里没有的名字忽略（手工补的另走接口）。
+    带 owner 键时按表单里的选择覆盖（空串表示清空、改回跟随主任务）。
+    """
+    if not isinstance(tasks, list) or not tasks:
+        return
+    stamp = now_ms()
+    cur.execute(
+        "SELECT id, name, status, amount FROM account_item_tasks WHERE item_id = %s ORDER BY id",
+        (item_id,),
+    )
+    rows = {}
+    for row in cur.fetchall():
+        if isinstance(row, dict):
+            rows.setdefault(row["name"], []).append(row)
+        else:
+            rows.setdefault(row[1], []).append(
+                {"id": row[0], "name": row[1], "status": row[2], "amount": row[3]}
+            )
+    for entry in tasks:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()[:60]
+        if not name or name not in rows:
+            continue
+        row = rows[name].pop(0)
+        status = entry.get("status")
+        if status not in TASK_STATUS_LABELS:
+            status = None
+        amount = to_number(entry.get("amount"), None) if "amount" in entry else None
+        if amount is not None and amount < 0:
+            amount = 0
+        # 表单里显式带了跟进人：按选择覆盖；没带就保持原样（不拿录单人顶替）
+        owner_set = "owner" in entry
+        owner = str(entry.get("owner") or "").strip()[:60]
+        if status is None and amount is None and not owner_set:
+            continue
+        new_status = status or row["status"]
+        new_amount = float(row["amount"] or 0) if amount is None else float(amount)
+        cur.execute(
+            """
+            UPDATE account_item_tasks
+               SET status = %s,
+                   amount = %s,
+                   done_at = CASE WHEN %s = 'done' THEN COALESCE(done_at, %s) ELSE NULL END,
+                   owner = CASE WHEN %s THEN %s ELSE owner END,
+                   updated_at = %s
+             WHERE id = %s
+            """,
+            (new_status, round(new_amount, 2), new_status, stamp,
+             owner_set, owner, stamp, row["id"]),
+        )
+
+
+def backfill_progress_task_links(cur):
+    """老跟进记录没有 task_id：按办理线挂到该执照下第一条同线子任务。
+
+    「已录入 / 状态变更 / 已完成」这类系统记录保持为空（新界面不再展示主任务级时间线）。
+    按条判断，重复执行无副作用。
+    """
+    cur.execute(
+        """
+        UPDATE order_progress p
+           SET task_id = (
+               SELECT t.id FROM account_item_tasks t
+                WHERE t.item_id = p.item_id
+                  AND t.line = CASE WHEN p.step LIKE '工商 · %' THEN 'biz' ELSE 'tax' END
+                ORDER BY t.sort, t.id
+                LIMIT 1
+           )
+         WHERE p.task_id IS NULL
+           AND (p.step LIKE '工商 · %' OR p.step LIKE '税务 · %')
+        """
+    )
+    return cur.rowcount
+
+
+def backfill_item_tasks(cur):
+    """老订单补细分任务：还没有细分任务的执照，按业务项拆一遍。"""
+    cur.execute(
+        """
+        SELECT i.id, i.account_id, i.items, i.status, i.owner
+          FROM account_items i
+         WHERE COALESCE(i.items, '') <> ''
+           AND NOT EXISTS (SELECT 1 FROM account_item_tasks t WHERE t.item_id = i.id)
+        """
+    )
+    rows = cur.fetchall()
+    for row in rows:
+        # 普通游标，按位置取值
+        sync_item_tasks(cur, row[0], row[1], row[2], row[3], row[4] or "")
+    if rows:
+        print("[startup] 补建细分任务：%d 条执照任务" % len(rows), flush=True)
+
+
+# 价格配置的预置价目：来源是线下的《工商税务代办价格表》，
+# 首次启动导入一次，之后完全由「价格设置」维护（改价、增删项目）。
+PRICE_SEED = [
+    ("税务注销", "税务注销（账务清晰、无欠税无异常）", "已按时申报、账册齐全、无未结事项", 150),
+    ("税务注销", "税务注销（账务不规范 / 有漏申报）", "有漏报、错报、账册不全需补整", 300),
+    ("税务注销", "税务注销（有欠税 / 滞纳金）", "存在欠缴税款、滞纳金、罚款", 400),
+    ("解除非正常", "解除税务非正常户（仅补申报）", "被列为非正常户，仅需补逾期申报", 100),
+    ("解除非正常", "解除非正常户（补申报 + 罚款）", "需补申报且缴罚款、滞纳金", 150),
+    ("解除非正常", "解除非正常户（有欠税需清缴）", "欠税、罚款一并处理", 200),
+    ("工商注销", "个体户简易注销（税务已清/无税务）", "无税务异常、无债权债务纠纷", 100),
+    ("工商注销", "个体户一般注销", "需清算公示等一般流程", 300),
+    ("工商注销", "有限公司简易注销（税务已清）", "未开业或无债权债务，公示20日", 500),
+    ("工商注销", "有限公司一般注销", "需清算组备案、债权人公告45日", 800),
+    ("工商注销", "吊销执照后注销", "执照已被吊销，需先处理处罚", 500),
+    ("综合套餐", "个体户全包注销（税务+工商）", "正常状态、账务简单", 200),
+    ("综合套餐", "有限公司全包注销（税务+工商+社保）", "账务清晰、无重大异常", 1000),
+    ("综合套餐", "吊销企业全包注销", "已被吊销，需解除非正常+注销", 800),
+    ("综合套餐", "解除非正常 + 注销一站式", "税务非正常户需先恢复再注销", 500),
+    ("附加服务", "公章 / 其他资质注销", "公章、许可资质一并注销", 200),
+]
+
+# 类别顺序：价目表按这个顺序分组展示，新类别排在最后
+PRICE_CATEGORY_ORDER = ["税务注销", "解除非正常", "工商注销", "综合套餐", "附加服务"]
+
+PRICE_NOTICE = (
+    "以下价格为参考价，仅作预算参考，非固定报价；不含政府部门规费、罚款、补缴税款等实报实销项目；"
+    "个体户与有限公司、税务状态（正常/非正常）、营业收入不同，价格差异较大，以最终报价为准。"
+)
+
+PRICE_TIPS = "\n".join([
+    "税务非正常户必须先补申报、缴清税款罚款解除异常后才能注销；",
+    "吊销≠注销，执照被吊销仍须主动办理注销，否则法人/股东持续受限；",
+    "财务负责人/法人实名备案，委托代办后责任仍在你本人，务必选择正规机构并签书面委托合同；",
+    "所有实报实销费用（罚款、补税、规费、登报等）要求机构提前书面列明。",
+])
+
+
+def seed_prices(cur):
+    """首次启动导入预置价目；已有数据时不动，避免把用户改过的价格覆盖回去。"""
+    cur.execute("SELECT COUNT(*) FROM price_items")
+    if cur.fetchone()[0] == 0:
+        category_index = {name: index for index, name in enumerate(PRICE_CATEGORY_ORDER)}
+        counters = {}
+        for category, name, condition, price in PRICE_SEED:
+            counters[category] = counters.get(category, 0) + 10
+            cur.execute(
+                """
+                INSERT INTO price_items
+                       (category, name, condition, price, peer_price, remark, sort, active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
+                ON CONFLICT (name) DO NOTHING
+                """,
+                (
+                    category, name, condition, price, price, "",
+                    (category_index.get(category, 99) + 1) * 1000 + counters[category],
+                ),
+            )
+    for key, value in (("notice", PRICE_NOTICE), ("tips", PRICE_TIPS)):
+        cur.execute(
+            """
+            INSERT INTO price_settings (key, value)
+            VALUES (%s, %s)
+            ON CONFLICT (key) DO NOTHING
+            """,
+            (key, value),
+        )
+
+
+def seed_menus(cur):
     for old_path, (path, title, icon, parent, sort) in MENU_RENAME.items():
         cur.execute(
             """
@@ -1454,6 +2126,16 @@ class App(BaseHTTPRequestHandler):
             self.bizitem_update(body, user)
         elif path == "/vue-element-admin/bizitem/delete" and method == "POST":
             self.bizitem_delete(body, user)
+        elif path == "/vue-element-admin/price/list" and method == "GET":
+            self.price_list(query)
+        elif path == "/vue-element-admin/price/create" and method == "POST":
+            self.price_create(body, user)
+        elif path == "/vue-element-admin/price/update" and method == "POST":
+            self.price_update(body, user)
+        elif path == "/vue-element-admin/price/delete" and method == "POST":
+            self.price_delete(body, user)
+        elif path == "/vue-element-admin/price/settings" and method == "POST":
+            self.price_save_settings(body, user)
         elif path == "/vue-element-admin/search/user" and method == "GET":
             self.search_user(query)
         elif path == "/vue-element-admin/transaction/list" and method == "GET":
@@ -1472,18 +2154,46 @@ class App(BaseHTTPRequestHandler):
             self.account_update(body, user)
         elif path == "/vue-element-admin/account/delete" and method == "POST":
             self.account_delete(body)
+        elif path == "/vue-element-admin/account/refund" and method == "POST":
+            self.account_refund(body, user)
+        elif path == "/vue-element-admin/account/cancel" and method == "POST":
+            self.account_cancel(body, user)
         elif path == "/vue-element-admin/account/progress/list" and method == "GET":
             self.progress_list(query)
         elif path == "/vue-element-admin/account/progress/overview" and method == "GET":
             self.progress_overview(query)
         elif path == "/vue-element-admin/account/progress/summary" and method == "GET":
             self.progress_summary()
+        elif path == "/vue-element-admin/account/progress/owners" and method == "GET":
+            self.progress_owners()
+        elif path == "/vue-element-admin/account/progress/files" and method == "GET":
+            self.progress_files_list(query)
+        elif path == "/vue-element-admin/account/progress/files/add" and method == "POST":
+            self.progress_file_add(body, user)
+        elif path == "/vue-element-admin/account/progress/files/delete" and method == "POST":
+            self.progress_file_delete(body)
         elif path == "/vue-element-admin/finance/report" and method == "GET":
             self.finance_report(query)
         elif path == "/vue-element-admin/account/progress/create" and method == "POST":
             self.progress_create(body, user)
+        elif path == "/vue-element-admin/account/progress/owner" and method == "POST":
+            self.progress_owner_set(body, user)
+        elif path == "/vue-element-admin/account/progress/tasks" and method == "GET":
+            self.progress_tasks_list(query)
+        elif path == "/vue-element-admin/account/progress/tasks/status" and method == "POST":
+            self.progress_task_status(body, user)
+        elif path == "/vue-element-admin/account/progress/tasks/add" and method == "POST":
+            self.progress_task_add(body, user)
+        elif path == "/vue-element-admin/account/progress/tasks/delete" and method == "POST":
+            self.progress_task_delete(body, user)
+        elif path == "/vue-element-admin/account/progress/tasks/owner" and method == "POST":
+            self.progress_task_owner(body, user)
         elif path == "/vue-element-admin/account/progress/delete" and method == "POST":
-            self.progress_delete(body)
+            self.progress_delete(body, user)
+        elif path == "/vue-element-admin/account/progress/refund" and method == "POST":
+            self.progress_refund(body, user)
+        elif path == "/vue-element-admin/account/progress/cancel" and method == "POST":
+            self.progress_cancel(body, user)
         elif path == "/vue-element-admin/cost/list" and method == "GET":
             self.cost_list(query)
         elif path == "/vue-element-admin/cost/summary" and method == "GET":
@@ -1494,8 +2204,6 @@ class App(BaseHTTPRequestHandler):
             self.cost_update(body)
         elif path == "/vue-element-admin/cost/delete" and method == "POST":
             self.cost_delete(body)
-        elif path == "/vue-element-admin/cost/restore" and method == "POST":
-            self.cost_restore(body)
         elif path == "/upload" and method == "POST":
             self.upload(body)
         elif path == "/qiniu/upload/token" and method == "GET":
@@ -1880,16 +2588,14 @@ class App(BaseHTTPRequestHandler):
         self.send_json({"code": 20000, "data": "success"})
 
     def account_list(self, query):
-        # 基础条件：已删除的订单不出现在列表与总数里
-        where = ["COALESCE(a.is_delete, 0) = 0"]
+        where = []
         params = []
         if query.get("keyword"):
             keyword = "%" + query["keyword"] + "%"
             where.append(
                 "(a.client ILIKE %s OR a.items ILIKE %s OR a.category ILIKE %s OR a.remark ILIKE %s"
                 " OR a.phone ILIKE %s OR a.order_no ILIKE %s OR a.platform_order_no ILIKE %s"
-                " OR EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id"
-                " AND i.is_delete = 0 AND ("
+                " OR EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND ("
                 " i.license_name ILIKE %s OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s"
                 " OR i.legal_phone ILIKE %s OR i.items ILIKE %s)))"
             )
@@ -1911,14 +2617,12 @@ class App(BaseHTTPRequestHandler):
             # 工商状态可多选，库里是「正常,另册管理」这类逗号串，按元素命中
             where.append(
                 "EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id"
-                " AND i.is_delete = 0"
                 " AND %s = ANY(string_to_array(COALESCE(i.biz_status, ''), ',')))"
             )
             params.append(query["biz_status"])
         if query.get("tax_status"):
             where.append(
-                "EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id"
-                " AND i.is_delete = 0 AND i.tax_status = %s)"
+                "EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND i.tax_status = %s)"
             )
             params.append(query["tax_status"])
         if query.get("month"):
@@ -1949,10 +2653,7 @@ class App(BaseHTTPRequestHandler):
     def account_detail(self, query):
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT * FROM account_records WHERE id = %s AND is_delete = 0",
-                    (int(query.get("id") or 0),),
-                )
+                cur.execute("SELECT * FROM account_records WHERE id = %s", (int(query.get("id") or 0),))
                 row = cur.fetchone()
                 if row is None:
                     self.send_json({"code": 50000, "message": "Record not found"})
@@ -1961,13 +2662,12 @@ class App(BaseHTTPRequestHandler):
         self.send_json({"code": 20000, "data": account_out(row, grouped.get(row["id"], []))})
 
     def account_summary(self, query=None):
-        where = ["is_delete = 0"]
+        where_sql = ""
         params = []
         if query and query.get("month"):
             month = str(query["month"]).split("-")[-1].strip()
-            where.append("(biz_date LIKE %s OR biz_date LIKE %s)")
+            where_sql = " WHERE (biz_date LIKE %s OR biz_date LIKE %s)"
             params = [month + "/%", "%-" + month + "-%"]
-        where_sql = " WHERE " + " AND ".join(where)
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
@@ -1976,7 +2676,12 @@ class App(BaseHTTPRequestHandler):
                            COALESCE(SUM(revenue), 0) AS revenue,
                            COALESCE(SUM(cost), 0) AS cost,
                            COALESCE(SUM(COALESCE(profit, 0)), 0) AS profit,
-                           COUNT(*) FILTER (WHERE profit IS NULL) AS pending
+                           COUNT(*) FILTER (WHERE profit IS NULL) AS pending,
+                           -- 已完成订单口径：执照主任务全部办结的订单才计入总收入
+                           COUNT(*) FILTER (WHERE status = 'done') AS done_count,
+                           COALESCE(SUM(revenue) FILTER (WHERE status = 'done'), 0) AS done_revenue,
+                           COALESCE(SUM(cost) FILTER (WHERE status = 'done'), 0) AS done_cost,
+                           COALESCE(SUM(COALESCE(profit, 0)) FILTER (WHERE status = 'done'), 0) AS done_profit
                     FROM account_records
                     """ + where_sql,
                     params,
@@ -1990,6 +2695,10 @@ class App(BaseHTTPRequestHandler):
                 "cost": float(row["cost"] or 0),
                 "profit": float(row["profit"] or 0),
                 "pending": int(row["pending"] or 0),
+                "done_count": int(row["done_count"] or 0),
+                "done_revenue": float(row["done_revenue"] or 0),
+                "done_cost": float(row["done_cost"] or 0),
+                "done_profit": float(row["done_profit"] or 0),
             },
         })
 
@@ -2034,6 +2743,8 @@ class App(BaseHTTPRequestHandler):
             "legal_person": (first.get("legal_person") or "").strip() or (pick("legal_person") or "").strip(),
             "legal_id": ((first.get("legal_id") or "").strip() or (pick("legal_id") or "")).strip().upper(),
             "legal_phone": normalize_phone(first.get("legal_phone") or pick("legal_phone")),
+            # 客户身份证照片：列表 [{url, name, size}]，jsonb 落库
+            "id_photos": Json(normalize_photos(pick("id_photos", []) or [])),
         }
 
     def detail_values(self, body, existing=None):
@@ -2058,10 +2769,10 @@ class App(BaseHTTPRequestHandler):
         if profit is None and revenue is not None and cost is not None:
             profit = revenue - cost
         status = pick("status", "pending") or "pending"
-        if status not in ("pending", "doing", "done"):
+        if status not in ITEM_STATUSES:
             status = "pending"
-        # 完成时间：首次完成取当时时间，之后保持；退回待定/进行中则清空
-        if status == "done":
+        # 完成/取消/退款都算关单：首次关单取当时时间，之后保持；退回待定/进行中则清空
+        if status in CLOSED_ITEM_STATUSES:
             prior = existing.get("completed_at") if existing is not None else None
             completed_at = int(prior) if prior else now_ms()
         else:
@@ -2086,20 +2797,24 @@ class App(BaseHTTPRequestHandler):
             "status": status,
             "completed_at": completed_at,
             "remark": (pick("remark") or "").strip(),
+            # 表单里逐条指定的子任务状态 / 单价（业务项自动拆出来的那些）
+            "tasks": body.get("tasks") if isinstance(body.get("tasks"), list) else None,
+            # 执照照片：列表 [{url, name, size}]，jsonb 落库
+            "license_photos": Json(normalize_photos(pick("license_photos", []) or [])),
         }
 
     def insert_detail(self, cur, account_id, values, position, operator, account_record):
         columns = [
             "account_id", "license_name", "credit_code", "legal_person", "legal_id", "legal_phone",
             "biz_status", "tax_status", "items", "unit_price", "quantity",
-            "revenue", "cost", "profit", "status", "completed_at", "remark", "sort",
+            "revenue", "cost", "profit", "status", "completed_at", "remark", "sort", "license_photos",
         ]
         params = [
             account_id, values["license_name"], values["credit_code"], values["legal_person"],
             values["legal_id"], values["legal_phone"],
             values["biz_status"], values["tax_status"], values["items"], values["unit_price"], values["quantity"],
             values["revenue"], values["cost"], values["profit"], values["status"], values["completed_at"],
-            values["remark"], position,
+            values["remark"], position, values["license_photos"],
         ]
         cur.execute(
             "INSERT INTO account_items (" + ", ".join(columns) + ") VALUES ("
@@ -2109,14 +2824,18 @@ class App(BaseHTTPRequestHandler):
         row = cur.fetchone()
         # 每个执照就是一条任务，录入即生成「已录入」进度
         auto_progress(cur, account_record, operator, row["id"], values)
+        # 业务项（工商注销 / 税务非正常解除…）各生成一条细分任务，后续可单独办结
+        sync_item_tasks(cur, row["id"], account_id, values["items"], values["status"])
+        # 录单时就能指定每条子任务的状态/单价，不用先存再改
+        if values.get("tasks"):
+            apply_task_overrides(cur, row["id"], values["tasks"], operator)
+        # 录完就有子任务了：主任务状态跟着子任务走（有未办结的就是「进行中」），录单阶段静默对齐
+        self.item_task_summary(cur, row["id"], quiet=True)
         return row
 
     def sync_details(self, cur, account_id, details, operator, account_record):
         """按提交的明细做增删改：保留 id 的更新，无 id 的新建，未提交的删除（进度级联删除）。"""
-        cur.execute(
-            "SELECT * FROM account_items WHERE account_id = %s AND is_delete = 0 ORDER BY sort, id",
-            (account_id,),
-        )
+        cur.execute("SELECT * FROM account_items WHERE account_id = %s ORDER BY sort, id", (account_id,))
         existing = {row["id"]: row for row in cur.fetchall()}
         kept = []
         position = 0
@@ -2133,6 +2852,16 @@ class App(BaseHTTPRequestHandler):
                 row = self.insert_detail(cur, account_id, values, position, operator, account_record)
                 kept.append(row["id"])
             else:
+                # 取消信息：直接在下拉里改成「取消订单」时补个时间；改回其它状态视为恢复，清空原因
+                cancel_reason = current.get("cancel_reason") or ""
+                cancel_note = current.get("cancel_note") or ""
+                cancelled_at = current.get("cancelled_at")
+                prior_status = current["status"] or "pending"
+                if values["status"] == "cancelled":
+                    if prior_status != "cancelled":
+                        cancelled_at = cancelled_at or now_ms()
+                elif prior_status == "cancelled":
+                    cancel_reason, cancel_note, cancelled_at = "", "", None
                 cur.execute(
                     """
                     UPDATE account_items
@@ -2140,7 +2869,8 @@ class App(BaseHTTPRequestHandler):
                            legal_phone = %s,
                            biz_status = %s, tax_status = %s, items = %s, unit_price = %s, quantity = %s,
                            revenue = %s, cost = %s, profit = %s, status = %s, completed_at = %s,
-                           remark = %s, sort = %s
+                           remark = %s, sort = %s, license_photos = %s,
+                           cancel_reason = %s, cancel_note = %s, cancelled_at = %s
                      WHERE id = %s
                     """,
                     (
@@ -2148,12 +2878,26 @@ class App(BaseHTTPRequestHandler):
                         values["legal_phone"],
                         values["biz_status"], values["tax_status"], values["items"], values["unit_price"],
                         values["quantity"], values["revenue"], values["cost"], values["profit"],
-                        values["status"], values["completed_at"], values["remark"], position, item_id,
+                        values["status"], values["completed_at"], values["remark"], position,
+                        values["license_photos"],
+                        cancel_reason, cancel_note, cancelled_at, item_id,
                     ),
                 )
                 kept.append(item_id)
+                # 业务项有增删时同步细分任务（已有的保留各自办理状态）
+                sync_item_tasks(
+                    cur, item_id, account_id, values["items"], values["status"],
+                    (current.get("owner") or ""),
+                )
+                # 表单里逐条改过的子任务状态/单价
+                if values.get("tasks"):
+                    apply_task_overrides(cur, item_id, values["tasks"], operator)
+                    aligned = self.item_task_summary(cur, item_id, quiet=True)
+                    # 子任务全办结会带着主任务变「已完成」，跟进记录按对齐后的状态写
+                    if aligned.get("status"):
+                        values["status"] = aligned["status"]
                 if values["status"] != (current["status"] or "pending"):
-                    label = {"pending": "待定", "doing": "进行中", "done": "已完成"}.get(values["status"], values["status"])
+                    label = ITEM_STATUS_LABELS.get(values["status"], values["status"])
                     note = "任务状态更新为「%s」" % label
                     if values["status"] == "done":
                         note = "任务已完成，完成时间 " + format_completed(values["completed_at"])
@@ -2165,10 +2909,7 @@ class App(BaseHTTPRequestHandler):
             position += 1
         removed = [item_id for item_id in existing if item_id not in kept]
         if removed:
-            cur.execute(
-                "UPDATE account_items SET is_delete = 1 WHERE id = ANY(%s) AND is_delete = 0",
-                (removed,),
-            )
+            cur.execute("DELETE FROM account_items WHERE id = ANY(%s)", (removed,))
         recalc_order(cur, account_id)
 
     def account_create(self, body, user):
@@ -2216,10 +2957,7 @@ class App(BaseHTTPRequestHandler):
         record_id = int(body.get("id") or 0)
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT * FROM account_records WHERE id = %s AND is_delete = 0",
-                    (record_id,),
-                )
+                cur.execute("SELECT * FROM account_records WHERE id = %s", (record_id,))
                 existing = cur.fetchone()
                 if existing is None:
                     self.send_json({"code": 50000, "message": "Record not found"})
@@ -2265,24 +3003,281 @@ class App(BaseHTTPRequestHandler):
         self.send_json({"code": 20000, "data": account_out(row, grouped.get(record_id, []))})
 
     def account_delete(self, body):
-        """软删除：只把订单及其明细、进度标记为已删除，数据永久留在库里。"""
-        record_id = int(body.get("id") or 0)
         with connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE account_records SET is_delete = 1 WHERE id = %s AND is_delete = 0",
-                    (record_id,),
-                )
-                cur.execute(
-                    "UPDATE account_items SET is_delete = 1 WHERE account_id = %s AND is_delete = 0",
-                    (record_id,),
-                )
-                cur.execute(
-                    "UPDATE order_progress SET is_delete = 1 WHERE account_id = %s AND is_delete = 0",
-                    (record_id,),
-                )
+                cur.execute("DELETE FROM account_records WHERE id = %s", (int(body.get("id") or 0),))
             conn.commit()
         self.send_json({"code": 20000, "data": "success"})
+
+    # ---------------- 订单级退款 / 取消（订单列表发起） ----------------
+
+    def account_refund(self, body, user):
+        """订单退款：从订单列表发起，可整单退，也可只退选中的几个执照任务。
+
+        - 不传 item_ids 就退所有还能退的任务；传了只退选中的那几条。
+        - 一笔退款在「成本管理」只记一条退款支出（kind='refund'），财务统计会排除，
+          因为退款金额已经在订单收入里扣过一次，不能再当支出扣第二次。
+        - 每条被退的任务都会在跟进时间线留一条「退款」记录，订单状态按任务回算。
+        """
+        account_id = int(body.get("account_id") or 0)
+        if not account_id:
+            self.send_json({"code": 50000, "message": "缺少订单 id"})
+            return
+        raw_ids = body.get("item_ids") or []
+        if isinstance(raw_ids, str):
+            raw_ids = [part for part in raw_ids.split(",") if part.strip()]
+        wanted = {int(str(part).strip()) for part in raw_ids if str(part).strip().isdigit()}
+        operator = user["username"] if user else ""
+        stamp = now_ms()
+        biz_date = (datetime.fromtimestamp(stamp / 1000, tz=timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM account_records WHERE id = %s FOR UPDATE", (account_id,))
+                account = cur.fetchone()
+                if account is None:
+                    self.send_json({"code": 50000, "message": "订单不存在"})
+                    return
+                cur.execute(
+                    "SELECT * FROM account_items WHERE account_id = %s ORDER BY sort, id FOR UPDATE",
+                    (account_id,),
+                )
+                items = cur.fetchall()
+                pool = [
+                    item for item in items
+                    if (item.get("status") or "") not in ("cancelled", "refunded")
+                    and float(item.get("revenue") or 0) > 0.004
+                ]
+                if wanted:
+                    pool = [item for item in pool if item["id"] in wanted]
+                    if not pool:
+                        self.send_json({"code": 50000, "message": "选中的任务都已取消/退款，或没有可退金额"})
+                        return
+                if not pool:
+                    self.send_json({"code": 50000, "message": "该订单没有可退金额"})
+                    return
+                available = round(sum(float(item.get("revenue") or 0) for item in pool), 2)
+                raw_amount = body.get("amount")
+                if raw_amount in (None, ""):
+                    amount = available
+                else:
+                    amount = round(to_number(raw_amount, 0) or 0, 2)
+                if amount <= 0:
+                    self.send_json({"code": 50000, "message": "退款金额必须大于 0"})
+                    return
+                if amount > available + 0.004:
+                    self.send_json({
+                        "code": 50000,
+                        "message": "退款金额不能超过可退金额 ¥" + format_amount(available),
+                    })
+                    return
+
+                reason = (body.get("reason") or "").strip()[:100]
+                method = (body.get("method") or "").strip()
+                shares = split_refund_amount(pool, amount)
+                refund_total = 0.0
+                touched = []
+                for item, take in shares:
+                    before = float(item.get("revenue") or 0)
+                    new_revenue, new_status = refund_item_line(cur, item, take, stamp)
+                    refund_total = round(refund_total + take, 2)
+                    note = "退款 ¥%s（%s），任务金额 %s → %s" % (
+                        format_amount(take),
+                        item.get("license_name") or "未填执照",
+                        format_amount(before),
+                        format_amount(new_revenue),
+                    )
+                    if reason:
+                        note += "；原因：" + reason
+                    insert_progress(cur, account_id, "退款", "done", note, operator, stamp, item["id"])
+                    touched.append({
+                        "item_id": item["id"],
+                        "license_name": item.get("license_name") or "",
+                        "refund": take,
+                        "revenue": new_revenue,
+                        "status": new_status,
+                    })
+
+                licenses = "、".join(item.get("license_name") for item, _ in shares if item.get("license_name"))
+                remark = "订单退款：%s %s；范围：%s" % (
+                    account.get("order_no") or ("订单#" + str(account_id)),
+                    account.get("client") or "",
+                    licenses or "整单",
+                )
+                if reason:
+                    remark += "；原因：" + reason
+                cur.execute(
+                    """
+                    INSERT INTO cost_records
+                           (timestamp, biz_date, category, payee, amount, method,
+                            related_order, remark, creator, kind)
+                    VALUES (%s, %s, '退款', %s, %s, %s, %s, %s, %s, 'refund')
+                    RETURNING id
+                    """,
+                    (
+                        stamp, biz_date, account.get("client") or "客户",
+                        refund_total, method, account_id, remark, operator,
+                    ),
+                )
+                cost_id = cur.fetchone()["id"]
+
+                recalc_order(cur, account_id)
+                cur.execute("SELECT status, revenue, profit FROM account_records WHERE id = %s", (account_id,))
+                order = cur.fetchone()
+            conn.commit()
+        self.send_json({
+            "code": 20000,
+            "data": {
+                "account_id": account_id,
+                "cost_id": cost_id,
+                "refund": refund_total,
+                "available": available,
+                "items": touched,
+                "account_status": order["status"],
+                "order_revenue": float(order["revenue"] or 0),
+                "order_profit": float(order["profit"] or 0),
+            },
+        })
+
+    def account_cancel(self, body, user):
+        """取消订单：从订单列表发起，可整单取消，也可只取消选中的几个执照任务。
+
+        和任务级的取消口径一致：默认把金额清零（不做了就不计收入），成本保留；
+        clear_amount=false 时只改状态、金额不动（比如退过一部分款的单子）。
+        """
+        account_id = int(body.get("account_id") or 0)
+        if not account_id:
+            self.send_json({"code": 50000, "message": "缺少订单 id"})
+            return
+        raw_ids = body.get("item_ids") or []
+        if isinstance(raw_ids, str):
+            raw_ids = [part for part in raw_ids.split(",") if part.strip()]
+        wanted = {int(str(part).strip()) for part in raw_ids if str(part).strip().isdigit()}
+        reason = (body.get("reason") or "").strip()[:100]
+        remark = (body.get("note") or "").strip()[:500]
+        clear_amount = body.get("clear_amount")
+        clear_amount = True if clear_amount is None else bool(clear_amount)
+        if not reason:
+            self.send_json({"code": 50000, "message": "请填写取消原因"})
+            return
+        operator = user["username"] if user else ""
+        stamp = now_ms()
+        biz_date = (datetime.fromtimestamp(stamp / 1000, tz=timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM account_records WHERE id = %s FOR UPDATE", (account_id,))
+                account = cur.fetchone()
+                if account is None:
+                    self.send_json({"code": 50000, "message": "订单不存在"})
+                    return
+                cur.execute(
+                    "SELECT * FROM account_items WHERE account_id = %s ORDER BY sort, id FOR UPDATE",
+                    (account_id,),
+                )
+                items = cur.fetchall()
+                targets = [item for item in items if (item.get("status") or "") not in ("cancelled", "refunded")]
+                if wanted:
+                    targets = [item for item in targets if item["id"] in wanted]
+                    if not targets:
+                        self.send_json({"code": 50000, "message": "选中的任务都已取消或退款，不能再取消"})
+                        return
+                if not targets:
+                    self.send_json({"code": 50000, "message": "该订单没有可取消的任务"})
+                    return
+
+                # 取消时可以把已收的钱一起退给客户：先冲减收入、记一笔退款流水，再取消
+                # （顺序不能反：取消会把金额清零，先取消就没金额可退了）
+                refund_raw = body.get("refund_amount")
+                refund_amount = 0.0 if refund_raw in (None, "") else round(to_number(refund_raw, 0) or 0, 2)
+                refund_method = (body.get("refund_method") or "").strip()
+                refund_total = 0.0
+                refundable = [
+                    item for item in targets
+                    if (item.get("status") or "") not in ("cancelled", "refunded")
+                    and float(item.get("revenue") or 0) > 0.004
+                ]
+                refundable_total = round(sum(float(item.get("revenue") or 0) for item in refundable), 2)
+                if refund_amount > 0.004:
+                    if not refundable:
+                        self.send_json({"code": 50000, "message": "选中的任务没有可退金额"})
+                        return
+                    if refund_amount > refundable_total + 0.004:
+                        self.send_json({
+                            "code": 50000,
+                            "message": "退款金额不能超过已收金额 ¥" + format_amount(refundable_total),
+                        })
+                        return
+                    refunded_map = {}
+                    shares = split_refund_amount(refundable, refund_amount)
+                    for item, take in shares:
+                        before_revenue = float(item.get("revenue") or 0)
+                        new_revenue, _new_status = refund_item_line(cur, item, take, stamp)
+                        refund_total = round(refund_total + take, 2)
+                        refunded_map[item["id"]] = new_revenue
+                        note = "退款 ¥%s（%s），任务金额 %s → %s" % (
+                            format_amount(take),
+                            item.get("license_name") or "未填执照",
+                            format_amount(before_revenue),
+                            format_amount(new_revenue),
+                        )
+                        if reason:
+                            note += "；原因：" + reason
+                        insert_progress(cur, account_id, "退款", "done", note, operator, stamp, item["id"])
+                    # 后续取消按退款后的金额算，跟进里的「金额 → 0」才对得上
+                    targets = [
+                        dict(item, revenue=refunded_map.get(item["id"], item.get("revenue")))
+                        for item in targets
+                    ]
+                    refund_licenses = "、".join(
+                        item.get("license_name") for item, _ in shares
+                        if item.get("license_name")
+                    )
+                    refund_remark = "取消订单退款：%s %s；范围：%s" % (
+                        account.get("order_no") or ("订单#" + str(account_id)),
+                        account.get("client") or "",
+                        refund_licenses or "整单",
+                    )
+                    if reason:
+                        refund_remark += "；原因：" + reason
+                    cur.execute(
+                        """
+                        INSERT INTO cost_records
+                               (timestamp, biz_date, category, payee, amount, method,
+                                related_order, remark, creator, kind)
+                        VALUES (%s, %s, '退款', %s, %s, %s, %s, %s, %s, 'refund')
+                        """,
+                        (
+                            stamp, biz_date, account.get("client") or "客户",
+                            refund_total, refund_method, account_id, refund_remark, operator,
+                        ),
+                    )
+
+                cleared = 0
+                for item in targets:
+                    before, after = cancel_item_line(cur, item, stamp, reason, remark, clear_amount)
+                    note = "取消订单，原因：" + reason
+                    if remark:
+                        note += "；备注：" + remark
+                    if clear_amount and before > 0.004:
+                        note += "；金额 %s → 0（不计收入）" % format_amount(before)
+                        cleared += 1
+                    insert_progress(cur, account_id, "取消订单", "done", note, operator, stamp, item["id"])
+
+                recalc_order(cur, account_id)
+                cur.execute("SELECT status, revenue, profit FROM account_records WHERE id = %s", (account_id,))
+                order = cur.fetchone()
+            conn.commit()
+        self.send_json({
+            "code": 20000,
+            "data": {
+                "account_id": account_id,
+                "cancelled_count": len(targets),
+                "cleared_count": cleared,
+                "refund": refund_total,
+                "account_status": order["status"],
+                "order_revenue": float(order["revenue"] or 0),
+                "order_profit": float(order["profit"] or 0),
+            },
+        })
 
     # ---------------- 订单进度 ----------------
 
@@ -2293,27 +3288,30 @@ class App(BaseHTTPRequestHandler):
         if not item_id and not account_id:
             self.send_json({"code": 50000, "message": "缺少任务 id"})
             return
+        files_by_line = {}
+        item_tasks = []
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 if item_id:
                     cur.execute(
-                        "SELECT * FROM order_progress WHERE item_id = %s AND is_delete = 0"
-                        " ORDER BY timestamp ASC, id ASC",
+                        "SELECT p.*, u.name AS operator_name, u.avatar AS operator_avatar"
+                        "  FROM order_progress p"
+                        "  LEFT JOIN users u ON u.username = p.operator"
+                        " WHERE p.item_id = %s ORDER BY p.timestamp ASC, p.id ASC",
                         (item_id,),
                     )
                 else:
                     cur.execute(
-                        "SELECT * FROM order_progress WHERE account_id = %s AND is_delete = 0"
-                        " ORDER BY timestamp ASC, id ASC",
+                        "SELECT p.*, u.name AS operator_name, u.avatar AS operator_avatar"
+                        "  FROM order_progress p"
+                        "  LEFT JOIN users u ON u.username = p.operator"
+                        " WHERE p.account_id = %s ORDER BY p.timestamp ASC, p.id ASC",
                         (account_id,),
                     )
                 items = [progress_out(row) for row in cur.fetchall()]
                 item = None
                 if item_id:
-                    cur.execute(
-                        "SELECT * FROM account_items WHERE id = %s AND is_delete = 0",
-                        (item_id,),
-                    )
+                    cur.execute("SELECT * FROM account_items WHERE id = %s", (item_id,))
                     item_row = cur.fetchone()
                     if item_row is not None:
                         cur.execute("SELECT * FROM account_records WHERE id = %s", (item_row["account_id"],))
@@ -2328,17 +3326,119 @@ class App(BaseHTTPRequestHandler):
                                 "category": account_row["category"] or "",
                                 "account_status": account_row["status"] or "pending",
                             })
+                        # 主跟进人显示名：显式指定优先，没指定就按跟进记录推断
+                        owner_user = item.get("owner") or ""
+                        if not owner_user:
+                            for record in reversed(items):
+                                if (record.get("step") or "") != "已录入" and record.get("operator"):
+                                    owner_user = record["operator"]
+                                    break
+                            item["owner_auto"] = bool(owner_user)
+                        item["owner"] = owner_user
+                        item["owner_name"] = owner_user
+                        if owner_user:
+                            cur.execute("SELECT name, avatar FROM users WHERE username = %s", (owner_user,))
+                            user_row = cur.fetchone()
+                            if user_row is not None:
+                                item["owner_name"] = user_row["name"] or owner_user
+                                item["owner_avatar"] = user_row["avatar"] or ""
+                    # 办理线附件：工商 / 税务各自上传的图片，随跟进详情一起返回
+                    cur.execute(
+                        "SELECT * FROM progress_files WHERE item_id = %s ORDER BY timestamp ASC, id ASC",
+                        (item_id,),
+                    )
+                    for row in cur.fetchall():
+                        record = progress_file_out(row)
+                        files_by_line.setdefault(record["line"], []).append(record)
+                    # 细分任务：弹窗里可以直接勾「办结」，不用回列表
+                    item_tasks = fetch_item_tasks(cur, [item_id]).get(item_id, [])
         self.send_json({"code": 20000, "data": {
             "items": items,
+            "files": files_by_line,
+            "tasks": item_tasks,
             "steps": PROGRESS_STEPS,
             "stage_groups": PROGRESS_STAGE_GROUPS,
             "item": item,
         }})
 
+    def progress_files_list(self, query):
+        """某条任务下各办理线的附件（工商 / 税务两条线各自一组）。"""
+        item_id = int(query.get("item_id") or 0)
+        if not item_id:
+            self.send_json({"code": 50000, "message": "缺少任务 id"})
+            return
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM progress_files WHERE item_id = %s ORDER BY timestamp ASC, id ASC",
+                    (item_id,),
+                )
+                files = [progress_file_out(row) for row in cur.fetchall()]
+        by_line = {}
+        for record in files:
+            by_line.setdefault(record["line"], []).append(record)
+        self.send_json({"code": 20000, "data": {"items": files, "by_line": by_line}})
+
+    def progress_file_add(self, body, user):
+        """把已上传的图片挂到某条任务的办理线上（文件先走 /upload 拿到 url）。"""
+        item_id = int(body.get("item_id") or 0)
+        url = str(body.get("url") or "").strip()
+        line = str(body.get("line") or "").strip()
+        if not item_id or not url:
+            self.send_json({"code": 50000, "message": "缺少任务 id 或图片地址"})
+            return
+        if line not in ("biz", "tax", "common"):
+            line = "common"
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT id, account_id FROM account_items WHERE id = %s", (item_id,))
+                item_row = cur.fetchone()
+                if item_row is None:
+                    self.send_json({"code": 50000, "message": "任务不存在"})
+                    return
+                cur.execute(
+                    "INSERT INTO progress_files (item_id, account_id, line, url, name, size, uploader, timestamp)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+                    (
+                        item_id,
+                        item_row["account_id"],
+                        line,
+                        url,
+                        str(body.get("name") or "")[:200],
+                        int(body.get("size") or 0),
+                        user["username"] if user else "",
+                        now_ms(),
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        self.send_json({"code": 20000, "data": progress_file_out(row)})
+
+    def progress_file_delete(self, body):
+        """删掉一张附件（同时把 /uploads 下的物理文件清掉，避免堆积）。"""
+        file_id = int(body.get("id") or 0)
+        if not file_id:
+            self.send_json({"code": 50000, "message": "缺少附件 id"})
+            return
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT url FROM progress_files WHERE id = %s", (file_id,))
+                row = cur.fetchone()
+                cur.execute("DELETE FROM progress_files WHERE id = %s", (file_id,))
+            conn.commit()
+        url = (row or {}).get("url") or ""
+        if url.startswith("/uploads/"):
+            target = UPLOAD_DIR / os.path.basename(url)
+            try:
+                if target.is_file():
+                    target.unlink()
+            except OSError:
+                pass
+        self.send_json({"code": 20000, "data": "success"})
+
     def progress_overview(self, query):
-        """任务总览：一行 = 一条执照明细，带该任务最新进度。"""
-        # 已删除的订单与明细都不出现在任务总览里
-        where = ["COALESCE(i.is_delete, 0) = 0", "COALESCE(a.is_delete, 0) = 0"]
+        """任务总览：一行 = 一条执照明细，带该任务最新进度与主跟进人。"""
+        where = []
         params = []
         keyword = (query.get("keyword") or "").strip()
         if keyword:
@@ -2359,6 +3459,14 @@ class App(BaseHTTPRequestHandler):
         if query.get("tax_status"):
             where.append("i.tax_status = %s")
             params.append(query["tax_status"])
+        if query.get("owner"):
+            # 主跟进人：显式指定的优先，没指定就按「跟进记录最多的人」推断
+            where.append(
+                "COALESCE(NULLIF(i.owner, ''), (SELECT op.operator FROM order_progress op"
+                " WHERE op.item_id = i.id AND COALESCE(op.operator, '') <> '' AND op.step <> '已录入'"
+                " GROUP BY op.operator ORDER BY COUNT(*) DESC, MAX(op.timestamp) DESC LIMIT 1), '') = %s"
+            )
+            params.append(query["owner"])
         if query.get("month"):
             month = str(query["month"]).split("-")[-1].strip()
             where.append("(a.biz_date LIKE %s OR a.biz_date LIKE %s)")
@@ -2374,18 +3482,32 @@ class App(BaseHTTPRequestHandler):
                    p.note AS last_note,
                    p.operator AS last_operator,
                    p.timestamp AS last_timestamp,
+                   COALESCE(NULLIF(i.owner, ''), ow.username, '') AS owner_user,
+                   COALESCE(ow.cnt, 0) AS owner_cnt,
+                   uo.name AS owner_name,
+                   uo.avatar AS owner_avatar,
                    COALESCE(c.cnt, 0) AS progress_count
               FROM account_items i
               JOIN account_records a ON a.id = i.account_id
               LEFT JOIN LATERAL (
                    SELECT * FROM order_progress
-                    WHERE item_id = i.id AND is_delete = 0
+                    WHERE item_id = i.id
                     ORDER BY timestamp DESC, id DESC
                     LIMIT 1
               ) p ON TRUE
+              -- 自动推断的主跟进人：跟进条数最多（同条数取最近跟进）的那个人；系统自动写的「已录入」不算，改任务状态也算人跟进
+              LEFT JOIN LATERAL (
+                   SELECT op.operator AS username, COUNT(*) AS cnt, MAX(op.timestamp) AS ts
+                     FROM order_progress op
+                    WHERE op.item_id = i.id AND COALESCE(op.operator, '') <> '' AND op.step <> '已录入'
+                    GROUP BY op.operator
+                    ORDER BY COUNT(*) DESC, MAX(op.timestamp) DESC
+                    LIMIT 1
+              ) ow ON TRUE
+              LEFT JOIN users uo ON uo.username = COALESCE(NULLIF(i.owner, ''), ow.username)
               LEFT JOIN (
                    SELECT item_id, COUNT(*) AS cnt FROM order_progress
-                    WHERE item_id IS NOT NULL AND is_delete = 0 GROUP BY item_id
+                    WHERE item_id IS NOT NULL GROUP BY item_id
               ) c ON c.item_id = i.id
         """
         with connect() as conn:
@@ -2403,6 +3525,7 @@ class App(BaseHTTPRequestHandler):
                 ids = []
                 for row in cur.fetchall():
                     record = item_out(row)
+                    owner_user = row["owner_user"] or ""
                     record.update({
                         "client": row["client"] or "",
                         "phone": row["phone"] or "",
@@ -2417,16 +3540,29 @@ class App(BaseHTTPRequestHandler):
                         "last_operator": row["last_operator"] or "",
                         "last_timestamp": int(row["last_timestamp"] or 0),
                         "progress_count": int(row["progress_count"] or 0),
+                        # 主跟进人：显式指定 or 按跟进记录推断（owner_auto=True 表示是推断出来的）
+                        "owner": owner_user,
+                        "owner_name": row["owner_name"] or owner_user,
+                        "owner_avatar": row["owner_avatar"] or "",
+                        "owner_auto": bool(owner_user) and not (row.get("owner") or ""),
+                        "owner_count": int(row["owner_cnt"] or 0),
                     })
                     items.append(record)
                     ids.append(record["id"])
 
                 # 三条办理线各自的最新状态：未完成的排前面，已完成的（含系统自动写的「已录入」）不算当前进度
                 snapshot = progress_snapshot(cur, ids)
+                # 细分任务：主任务行默认折叠，展开才看这些业务项
+                tasks_map = fetch_item_tasks(cur, ids)
                 for record in items:
                     snap = snapshot.get(record["id"]) or {}
                     lines = snap.get("lines") or []
                     record["progress_lines"] = lines
+                    tasks = tasks_map.get(record["id"], [])
+                    record["tasks"] = tasks
+                    record["task_total"] = len(tasks)
+                    record["task_done"] = len([t for t in tasks if t["status"] == "done"])
+                    record["task_cancelled"] = len([t for t in tasks if t["status"] == "cancelled"])
                     record["open_steps"] = [
                         {
                             "group": line["group"],
@@ -2450,38 +3586,46 @@ class App(BaseHTTPRequestHandler):
                     SELECT step, COUNT(*) AS cnt FROM (
                         SELECT DISTINCT ON (item_id) item_id, step
                           FROM order_progress
-                         WHERE item_id IS NOT NULL AND is_delete = 0
+                         WHERE item_id IS NOT NULL
                          ORDER BY item_id, timestamp DESC, id DESC
                     ) latest GROUP BY step ORDER BY cnt DESC, step
                 """)
                 by_step = [{"step": row["step"], "count": int(row["cnt"])} for row in cur.fetchall()]
-                cur.execute(
-                    "SELECT COUNT(DISTINCT item_id) AS cnt FROM order_progress"
-                    " WHERE item_id IS NOT NULL AND is_delete = 0"
-                )
+                cur.execute("SELECT COUNT(DISTINCT item_id) AS cnt FROM order_progress WHERE item_id IS NOT NULL")
                 covered = int(cur.fetchone()["cnt"] or 0)
-                cur.execute("SELECT COUNT(*) AS cnt FROM account_items WHERE is_delete = 0")
+                cur.execute("SELECT COUNT(*) AS cnt FROM account_items")
                 tasks = int(cur.fetchone()["cnt"] or 0)
-                cur.execute("SELECT COUNT(*) AS cnt FROM account_records WHERE is_delete = 0")
+                cur.execute("SELECT COUNT(*) AS cnt FROM account_records")
                 orders = int(cur.fetchone()["cnt"] or 0)
-                cur.execute(
-                    "SELECT COUNT(*) AS cnt FROM account_items WHERE status = 'done' AND is_delete = 0"
-                )
+                cur.execute("SELECT COUNT(*) AS cnt FROM account_items WHERE status = 'done'")
                 done = int(cur.fetchone()["cnt"] or 0)
                 cur.execute("""
                     SELECT COUNT(*) AS cnt FROM account_items i
-                     WHERE i.is_delete = 0
-                       AND NOT EXISTS (
-                           SELECT 1 FROM order_progress p
-                            WHERE p.item_id = i.id AND p.is_delete = 0
-                       )
+                     WHERE NOT EXISTS (SELECT 1 FROM order_progress p WHERE p.item_id = i.id)
                 """)
                 missing = int(cur.fetchone()["cnt"] or 0)
+                # 按任务状态分档：页面上的「任务总数」是全部任务，列表可能被状态筛选过，
+                # 这两个数字要能对得上，所以把各状态条数一并返回
+                cur.execute("SELECT status, COUNT(*) AS cnt FROM account_items GROUP BY status")
+                by_status = {"pending": 0, "doing": 0, "done": 0, "cancelled": 0, "refunded": 0}
+                for row in cur.fetchall():
+                    by_status[row["status"] or "pending"] = int(row["cnt"] or 0)
+                # 细分任务：执照按业务项拆出来的小任务，卡片上给个总进度
+                cur.execute(
+                    "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE status = 'done') AS done"
+                    "  FROM account_item_tasks"
+                )
+                subtask_row = cur.fetchone()
         self.send_json({
             "code": 20000,
             "data": {
                 "by_step": by_step, "covered": covered, "tasks": tasks,
                 "orders": orders, "done": done, "missing": missing,
+                "by_status": by_status,
+                "subtasks": {
+                    "total": int(subtask_row["total"] or 0),
+                    "done": int(subtask_row["done"] or 0),
+                },
             },
         })
 
@@ -2497,7 +3641,12 @@ class App(BaseHTTPRequestHandler):
         def summarize(ord_rows, cost_rows, item_rows):
             revenue = sum(float(row["revenue"] or 0) for row in ord_rows)
             direct_cost = sum(float(row["cost"] or 0) for row in ord_rows)
-            opex = sum(float(row["amount"] or 0) for row in cost_rows)
+            # 退款记录（kind='refund'）的金额已经在订单收入里冲减过，支出侧跳过，
+            # 否则同一笔退款会把当月利润扣两次
+            opex = sum(
+                float(row["amount"] or 0) for row in cost_rows
+                if (row.get("kind") or "") != "refund"
+            )
             done = sum(1 for row in item_rows if (row.get("status") or "") == "done")
             return {
                 "orders": len(ord_rows),
@@ -2512,9 +3661,9 @@ class App(BaseHTTPRequestHandler):
 
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM account_records WHERE is_delete = 0")
+                cur.execute("SELECT * FROM account_records")
                 all_orders = cur.fetchall()
-                cur.execute("SELECT * FROM cost_records WHERE is_delete = 0")
+                cur.execute("SELECT * FROM cost_records")
                 all_costs = cur.fetchall()
 
             if month is None:
@@ -2533,29 +3682,32 @@ class App(BaseHTTPRequestHandler):
 
             begin, end = month_bounds(month)
             orders = pick_month(all_orders, month)
-            costs = pick_month(all_costs, month)
+            # 退款记录不计入报表支出（收入已冲减），只留在「成本管理」里看现金流出
+            costs = [
+                row for row in pick_month(all_costs, month)
+                if (row.get("kind") or "") != "refund"
+            ]
             order_ids = [row["id"] for row in orders]
             details = []
             if order_ids:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(
-                        "SELECT * FROM account_items WHERE account_id = ANY(%s)"
-        " AND is_delete = 0 ORDER BY account_id, sort, id",
+                        "SELECT * FROM account_items WHERE account_id = ANY(%s) ORDER BY account_id, sort, id",
                         (order_ids,),
                     )
                     details = cur.fetchall()
 
             prev_key = prev_month(month)
             prev_orders = pick_month(all_orders, prev_key)
-            prev_costs = pick_month(all_costs, prev_key)
+            prev_costs = [
+                row for row in pick_month(all_costs, prev_key)
+                if (row.get("kind") or "") != "refund"
+            ]
             prev_ids = [row["id"] for row in prev_orders]
             prev_details = []
             if prev_ids:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(
-                        "SELECT * FROM account_items WHERE account_id = ANY(%s) AND is_delete = 0",
-                        (prev_ids,),
-                    )
+                    cur.execute("SELECT * FROM account_items WHERE account_id = ANY(%s)", (prev_ids,))
                     prev_details = cur.fetchall()
 
         summary = summarize(orders, costs, details)
@@ -2670,6 +3822,7 @@ class App(BaseHTTPRequestHandler):
     def progress_create(self, body, user):
         item_id = int(body.get("item_id") or 0)
         account_id = int(body.get("account_id") or 0)
+        task_id = int(body.get("task_id") or 0)
         step = (body.get("step") or "").strip()
         if not step or (not item_id and not account_id):
             self.send_json({"code": 50000, "message": "任务与进度阶段不能为空"})
@@ -2679,11 +3832,27 @@ class App(BaseHTTPRequestHandler):
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 item = None
+                task = None
+                # 挂在子任务上：先校验归属和编辑权限，只有跟进人本人或管理员能补跟进
+                if task_id:
+                    task = self.load_task(cur, task_id)
+                    if task is None:
+                        self.send_json({"code": 50000, "message": "细分任务不存在"})
+                        return
+                    if item_id and task["item_id"] != item_id:
+                        self.send_json({"code": 50000, "message": "细分任务不属于这条执照"})
+                        return
+                    if not self.task_edit_allowed(user, task):
+                        self.send_json({
+                            "code": 50000,
+                            "message": "这条子任务的跟进人是 %s，只有跟进人本人或管理员能补跟进" % (task.get("owner") or "—"),
+                        })
+                        return
+                    self.claim_task(cur, user, task)
+                    item_id = task["item_id"]
+                    account_id = task["account_id"]
                 if item_id:
-                    cur.execute(
-                        "SELECT * FROM account_items WHERE id = %s AND is_delete = 0",
-                        (item_id,),
-                    )
+                    cur.execute("SELECT * FROM account_items WHERE id = %s", (item_id,))
                     item = cur.fetchone()
                     if item is None:
                         self.send_json({"code": 50000, "message": "任务不存在"})
@@ -2691,8 +3860,7 @@ class App(BaseHTTPRequestHandler):
                     account_id = item["account_id"]
                 else:
                     cur.execute(
-                        "SELECT * FROM account_items WHERE account_id = %s AND is_delete = 0"
-                        " ORDER BY sort, id LIMIT 1",
+                        "SELECT * FROM account_items WHERE account_id = %s ORDER BY sort, id LIMIT 1",
                         (account_id,),
                     )
                     item = cur.fetchone()
@@ -2700,34 +3868,591 @@ class App(BaseHTTPRequestHandler):
                         self.send_json({"code": 50000, "message": "该订单还没有执照明细"})
                         return
                     item_id = item["id"]
-                insert_progress(cur, account_id, step, status, body.get("note"), operator, None, item_id)
-                # 进度推进到「已完成」时同步任务状态
-                if step == "已完成":
+                insert_progress(cur, account_id, step, status, body.get("note"), operator, None, item_id, task_id or None)
+                if task:
+                    # 这条子任务跟着推进：选了「办结」（或状态置为已完成）就办结，其它一律进行中；
+                    # 已经办结的子任务只是补一条过程记录，不被打回进行中（要重开直接改任务状态）
+                    finished = status == "done" or step.endswith("办结")
+                    current_status = task.get("status") or "pending"
+                    new_task_status = "done" if (finished or current_status == "done") else "doing"
+                    stamp = now_ms()
+                    cur.execute(
+                        """
+                        UPDATE account_item_tasks
+                           SET status = %s,
+                               done_at = CASE WHEN %s = 'done' THEN COALESCE(done_at, %s) ELSE NULL END,
+                               updated_at = %s
+                         WHERE id = %s
+                        """,
+                        (new_task_status, new_task_status, stamp, stamp, task_id),
+                    )
+                    # 子任务变了，主任务状态跟着对齐（全办结 → 主任务完成）
+                    self.item_task_summary(cur, item_id)
+                # 进度推进到「已完成」时同步任务状态；已退款/已取消的任务不再被改回进行中
+                elif step == "已完成" and (item.get("status") or "") not in ("refunded", "cancelled"):
                     cur.execute(
                         "UPDATE account_items SET status = 'done', completed_at = COALESCE(completed_at, %s) WHERE id = %s",
                         (now_ms(), item_id),
                     )
+                    # 主任务已完成：细分任务一起办结，展开后不会还挂着「未开始」
+                    sync_item_tasks(cur, item_id, account_id, item.get("items") or "", "done",
+                                    item.get("owner") or "")
                 elif status == "doing":
-                    cur.execute("UPDATE account_items SET status = 'doing' WHERE id = %s AND status = 'pending'", (item_id,))
-                recalc_order(cur, account_id)
-                cur.execute(
-                    "SELECT * FROM order_progress WHERE item_id = %s AND is_delete = 0"
-                    " ORDER BY id DESC LIMIT 1",
-                    (item_id,),
-                )
+                    cur.execute(
+                        "UPDATE account_items SET status = 'doing'"
+                        " WHERE id = %s AND status = 'pending'",
+                        (item_id,),
+                    )
+                if not task:
+                    recalc_order(cur, account_id)
+                cur.execute("SELECT * FROM order_progress WHERE item_id = %s ORDER BY id DESC LIMIT 1", (item_id,))
                 row = cur.fetchone()
             conn.commit()
         self.send_json({"code": 20000, "data": progress_out(row)})
 
-    def progress_delete(self, body):
+    def progress_delete(self, body, user=None):
+        rid = int(body.get("id") or 0)
         with connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE order_progress SET is_delete = 1 WHERE id = %s AND is_delete = 0",
-                    (int(body.get("id") or 0),),
-                )
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM order_progress WHERE id = %s", (rid,))
+                row = cur.fetchone()
+                if row is not None:
+                    if row.get("task_id"):
+                        task = self.load_task(cur, row["task_id"])
+                        if not self.task_edit_allowed(user, task):
+                            self.send_json({
+                                "code": 50000,
+                                "message": "这条跟进属于子任务，只有跟进人本人或管理员能删",
+                            })
+                            return
+                    elif not self.is_admin(user):
+                        self.send_json({"code": 50000, "message": "主任务级的系统记录只有管理员能删"})
+                        return
+                cur.execute("DELETE FROM order_progress WHERE id = %s", (rid,))
             conn.commit()
         self.send_json({"code": 20000, "data": "success"})
+
+    def progress_cancel(self, body, user):
+        """取消订单（任务级）：记下取消原因和备注，可同时把金额清零（不计收入）。
+
+        取消=这单不做了，所以默认把这条任务的收入冲成 0、成本保留（已发生的成本照样算），
+        利润如实变负；如果只是标记状态、金额不想动，传 clear_amount=false。
+        cancel_all=true 时连带取消同一订单下其它未取消/未退款的任务（整单作废时用）。
+        """
+        operator = user["username"] if user else ""
+        item_id = int(body.get("item_id") or 0)
+        reason = (body.get("reason") or "").strip()[:100]
+        remark = (body.get("note") or "").strip()[:500]
+        clear_amount = body.get("clear_amount")
+        clear_amount = True if clear_amount is None else bool(clear_amount)
+        cancel_all = bool(body.get("cancel_all"))
+        stamp = now_ms()
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT i.*, a.order_no, a.client
+                      FROM account_items i
+                      JOIN account_records a ON a.id = i.account_id
+                     WHERE i.id = %s
+                     FOR UPDATE
+                    """,
+                    (item_id,),
+                )
+                item = cur.fetchone()
+                if item is None:
+                    self.send_json({"code": 50000, "message": "任务不存在"})
+                    return
+                status = item.get("status") or "pending"
+                if status == "cancelled":
+                    self.send_json({"code": 50000, "message": "该任务已经是取消订单状态"})
+                    return
+                if status == "refunded":
+                    self.send_json({"code": 50000, "message": "该任务已全额退款，不能再取消"})
+                    return
+
+                account_id = item["account_id"]
+                targets = [item]
+                if cancel_all:
+                    cur.execute(
+                        """
+                        SELECT * FROM account_items
+                         WHERE account_id = %s AND id <> %s
+                           AND status NOT IN ('cancelled', 'refunded')
+                         ORDER BY sort, id
+                         FOR UPDATE
+                        """,
+                        (account_id, item_id),
+                    )
+                    targets.extend(cur.fetchall())
+
+                cleared = 0
+                for target in targets:
+                    revenue = float(target.get("revenue") or 0)
+                    cost = float(target.get("cost") or 0)
+                    new_revenue = 0.0 if clear_amount else revenue
+                    new_profit = round(new_revenue - cost, 2)
+                    cur.execute(
+                        """
+                        UPDATE account_items
+                           SET status = 'cancelled', completed_at = %s, cancelled_at = %s,
+                               cancel_reason = %s, cancel_note = %s,
+                               revenue = %s, profit = %s
+                         WHERE id = %s
+                        """,
+                        (stamp, stamp, reason, remark, new_revenue, new_profit, target["id"]),
+                    )
+                    note = "取消订单"
+                    if reason:
+                        note += "，原因：" + reason
+                    if remark:
+                        note += "；备注：" + remark
+                    if clear_amount and revenue > 0.004:
+                        note += "；金额 %s → 0（不计收入）" % format_amount(revenue)
+                        cleared += 1
+                    insert_progress(cur, account_id, "取消订单", "done", note, operator, stamp, target["id"])
+
+                recalc_order(cur, account_id)
+                cur.execute(
+                    "SELECT status, revenue, profit, cancel_reason, cancelled_at FROM account_items WHERE id = %s",
+                    (item_id,),
+                )
+                updated = cur.fetchone()
+                cur.execute(
+                    "SELECT status, revenue FROM account_records WHERE id = %s",
+                    (account_id,),
+                )
+                order = cur.fetchone()
+            conn.commit()
+        self.send_json({
+            "code": 20000,
+            "data": {
+                "item_id": item_id,
+                "item_status": updated["status"],
+                "revenue": float(updated["revenue"] or 0),
+                "profit": float(updated["profit"] or 0),
+                "cancel_reason": updated["cancel_reason"] or "",
+                "cancelled_at": int(updated["cancelled_at"] or 0),
+                "account_status": order["status"],
+                "order_revenue": float(order["revenue"] or 0),
+                "cancelled_count": len(targets),
+                "cleared_count": cleared,
+            },
+        })
+
+    def progress_refund(self, body, user):
+        """订单退款：冲减任务收入 → 成本管理记一条「退款」支出 → 写一条跟进 → 回算订单状态。
+
+        成本那条记录只用于看现金流出（kind='refund'），财务报表算利润时会排除，
+        因为退款金额已经在订单收入里扣过一次，不能再当支出扣第二次。
+        """
+        item_id = int(body.get("item_id") or 0)
+        if not item_id:
+            self.send_json({"code": 50000, "message": "缺少任务 id"})
+            return
+        operator = user["username"] if user else ""
+        stamp = now_ms()
+        biz_date = datetime.fromtimestamp(stamp / 1000).strftime("%Y-%m-%d")
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT i.*, a.order_no, a.client
+                      FROM account_items i
+                      JOIN account_records a ON a.id = i.account_id
+                     WHERE i.id = %s
+                     FOR UPDATE
+                    """,
+                    (item_id,),
+                )
+                item = cur.fetchone()
+                if item is None:
+                    self.send_json({"code": 50000, "message": "任务不存在"})
+                    return
+                status = item.get("status") or "pending"
+                if status == "cancelled":
+                    self.send_json({"code": 50000, "message": "该任务已取消，无需退款"})
+                    return
+                revenue = float(item.get("revenue") or 0)
+                if revenue <= 0.004:
+                    self.send_json({"code": 50000, "message": "该任务当前金额为 0，没有可退金额"})
+                    return
+                raw_amount = body.get("amount")
+                amount = revenue if raw_amount in (None, "") else (to_number(raw_amount, 0) or 0)
+                amount = round(amount, 2)
+                if amount <= 0:
+                    self.send_json({"code": 50000, "message": "退款金额必须大于 0"})
+                    return
+                if amount > revenue + 0.004:
+                    self.send_json({
+                        "code": 50000,
+                        "message": "退款金额不能超过该任务当前金额 ¥" + format_amount(revenue),
+                    })
+                    return
+
+                new_revenue = round(max(0.0, revenue - amount), 2)
+                cost = float(item.get("cost") or 0)
+                new_profit = round(new_revenue - cost, 2)
+                full_refund = new_revenue <= 0.004
+                new_status = "refunded" if full_refund else (
+                    status if status in ("doing", "done") else "doing"
+                )
+                completed_at = stamp if full_refund else item.get("completed_at")
+                cur.execute(
+                    """
+                    UPDATE account_items
+                       SET revenue = %s, profit = %s, status = %s, completed_at = %s,
+                           refund_amount = COALESCE(refund_amount, 0) + %s, refund_at = %s
+                     WHERE id = %s
+                    """,
+                    (new_revenue, new_profit, new_status, completed_at, amount, stamp, item_id),
+                )
+
+                reason = (body.get("reason") or "").strip()
+                method = (body.get("method") or "").strip()
+                label = "、".join(
+                    part for part in (item.get("order_no"), item.get("client"), item.get("license_name")) if part
+                )
+                remark = "订单退款：" + (label or ("任务#" + str(item_id)))
+                if reason:
+                    remark += "；原因：" + reason
+                cur.execute(
+                    """
+                    INSERT INTO cost_records
+                           (timestamp, biz_date, category, payee, amount, method,
+                            related_order, remark, creator, kind)
+                    VALUES (%s, %s, '退款', %s, %s, %s, %s, %s, %s, 'refund')
+                    RETURNING id
+                    """,
+                    (
+                        stamp, biz_date, item.get("client") or item.get("license_name") or "客户",
+                        amount, method, item["account_id"], remark, operator,
+                    ),
+                )
+                cost_id = cur.fetchone()["id"]
+
+                note = "退款 ¥%s，任务金额 %s → %s" % (
+                    format_amount(amount), format_amount(revenue), format_amount(new_revenue),
+                )
+                if reason:
+                    note += "；原因：" + reason
+                insert_progress(cur, item["account_id"], "退款", "done", note, operator, stamp, item_id)
+                recalc_order(cur, item["account_id"])
+
+                cur.execute(
+                    "SELECT revenue, profit, status, refund_amount FROM account_items WHERE id = %s",
+                    (item_id,),
+                )
+                updated = cur.fetchone()
+                cur.execute(
+                    "SELECT status, revenue FROM account_records WHERE id = %s",
+                    (item["account_id"],),
+                )
+                order = cur.fetchone()
+            conn.commit()
+        self.send_json({
+            "code": 20000,
+            "data": {
+                "item_id": item_id,
+                "cost_id": cost_id,
+                "refund": amount,
+                "revenue": float(updated["revenue"] or 0),
+                "profit": float(updated["profit"] or 0),
+                "item_status": updated["status"],
+                "refund_amount": float(updated["refund_amount"] or 0),
+                "account_status": order["status"],
+                "order_revenue": float(order["revenue"] or 0),
+            },
+        })
+
+    def progress_owners(self):
+        """主跟进人候选：系统用户 + 历史上出现过的跟进人（不要求管理员权限）。"""
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT username, name, avatar FROM users ORDER BY id")
+                users = [{
+                    "username": row["username"],
+                    "name": row["name"] or row["username"],
+                    "avatar": row["avatar"] or "",
+                } for row in cur.fetchall()]
+                cur.execute(
+                    "SELECT DISTINCT operator FROM order_progress"
+                    " WHERE COALESCE(operator, '') <> '' ORDER BY operator"
+                )
+                operators = [row["operator"] for row in cur.fetchall()]
+        known = {item["username"] for item in users} | {item["name"] for item in users}
+        for name in operators:
+            if name and name not in known:
+                users.append({"username": name, "name": name, "avatar": ""})
+        self.send_json({"code": 20000, "data": {"items": users}})
+
+    def progress_owner_set(self, body, user):
+        """设置/清空某条任务的主跟进人（传空字符串表示改回自动推断）。"""
+        item_id = int(body.get("item_id") or 0)
+        owner = (body.get("owner") or "").strip()
+        if not item_id:
+            self.send_json({"code": 50000, "message": "缺少任务 id"})
+            return
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT id FROM account_items WHERE id = %s", (item_id,))
+                if cur.fetchone() is None:
+                    self.send_json({"code": 50000, "message": "任务不存在"})
+                    return
+                cur.execute(
+                    "UPDATE account_items SET owner = %s, owner_updated_at = %s WHERE id = %s",
+                    (owner or None, now_ms(), item_id),
+                )
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"item_id": item_id, "owner": owner}})
+
+    # ---------------- 细分任务（执照下的业务项） ----------------
+
+    def item_task_summary(self, cur, item_id, quiet=False):
+        """回算一条任务的细分进度，顺手把主任务状态对齐。
+
+        主任务只有两个状态：细分任务全办结 → 已完成；否则一律「进行中」
+        （没有子任务可拆时，只把「待定」收成「进行中」，已完成 / 已取消不动）。
+        quiet=True 时只对齐状态，不写跟进、不重算订单（订单保存流程里自己会重算）。
+        """
+        cur.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE status = 'done') AS done,
+                   COUNT(*) FILTER (WHERE status = 'doing') AS doing,
+                   COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled
+              FROM account_item_tasks WHERE item_id = %s
+            """,
+            (item_id,),
+        )
+        stat = cur.fetchone()
+        total = int(stat["total"] or 0)
+        done = int(stat["done"] or 0)
+        doing = int(stat["doing"] or 0)
+        cancelled = int(stat["cancelled"] or 0)
+        cur.execute("SELECT * FROM account_items WHERE id = %s FOR UPDATE", (item_id,))
+        item = cur.fetchone()
+        if item is None:
+            return {"total": total, "done": done, "status": ""}
+        if not total:
+            # 没有可拆的子任务：待定收成进行中，别写状态变更记录免得时间线刷屏
+            if (item["status"] or "") == "pending":
+                cur.execute("UPDATE account_items SET status = 'doing' WHERE id = %s", (item_id,))
+                if not quiet:
+                    recalc_order(cur, item["account_id"])
+                return {"total": 0, "done": 0, "status": "doing"}
+            return {"total": 0, "done": 0, "status": item["status"] or ""}
+        status = item["status"] or "pending"
+        stamp = now_ms()
+        new_status = status
+        if status in ("pending", "doing", "done"):
+            if cancelled >= total:
+                # 子任务全被取消了：这个执照没有要做的事，随单取消，
+                # 别一直挂在「进行中」堵着整单（整单状态由 recalc_order 收口）
+                new_status = "cancelled"
+            else:
+                # 全办结 → 已完成；其余（含刚加了一条新子任务）→ 进行中
+                new_status = "done" if done >= total else "doing"
+        if new_status != status:
+            cur.execute(
+                """
+                UPDATE account_items
+                   SET status = %s,
+                       completed_at = CASE WHEN %s = 'done' THEN %s ELSE NULL END,
+                       cancelled_at = CASE WHEN %s = 'cancelled' THEN COALESCE(cancelled_at, %s) ELSE NULL END
+                 WHERE id = %s
+                """,
+                (new_status, new_status, stamp, new_status, stamp, item_id),
+            )
+            if not quiet:
+                if new_status == "done":
+                    note = "细分任务 %d/%d 已办结，任务自动标记完成" % (done, total)
+                elif new_status == "cancelled":
+                    note = "细分任务已全部取消，执照任务随单取消"
+                elif status == "done":
+                    note = "细分任务被重新打开，任务状态回到「%s」" % ITEM_STATUS_LABELS.get(new_status, new_status)
+                else:
+                    note = "细分任务未全部办结，任务状态改为「%s」" % ITEM_STATUS_LABELS.get(new_status, new_status)
+                insert_progress(
+                    cur, item["account_id"], "取消订单" if new_status == "cancelled" else ("已完成" if new_status == "done" else "状态变更"),
+                    "done" if new_status == "done" else "doing", note,
+                    "", stamp, item_id,
+                )
+                recalc_order(cur, item["account_id"])
+        return {"total": total, "done": done, "status": new_status}
+
+    def progress_tasks_list(self, query):
+        """取细分任务：传 account_id 一次取整个订单下所有执照的，传 item_id 只取一条执照的。
+
+        订单编辑弹窗里用它把每个执照按业务项拆出来的子任务回显出来。
+        """
+        account_id = int(query.get("account_id") or 0)
+        item_id = int(query.get("item_id") or 0)
+        if not account_id and not item_id:
+            self.send_json({"code": 50000, "message": "缺少订单 id 或任务 id"})
+            return
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if item_id:
+                    cur.execute("SELECT id FROM account_items WHERE id = %s", (item_id,))
+                else:
+                    cur.execute("SELECT id FROM account_items WHERE account_id = %s ORDER BY sort, id", (account_id,))
+                ids = [row["id"] for row in cur.fetchall()]
+                grouped = fetch_item_tasks(cur, ids)
+        self.send_json({"code": 20000, "data": {"tasks": {str(key): value for key, value in grouped.items()}}})
+
+    def load_task(self, cur, task_id):
+        if not task_id:
+            return None
+        cur.execute("SELECT * FROM account_item_tasks WHERE id = %s", (task_id,))
+        return cur.fetchone()
+
+    def task_edit_allowed(self, user, task):
+        """子任务只有它的跟进人本人和管理员能改；还没指定跟进人时谁都能改，第一次改就认领。"""
+        if not task:
+            return False
+        if self.is_admin(user):
+            return True
+        username = (user or {}).get("username") or ""
+        if not username:
+            return False
+        owner = (task.get("owner") or "").strip()
+        return (not owner) or owner == username
+
+    def claim_task(self, cur, user, task):
+        """无跟进人的子任务被编辑时，把操作人记成跟进人（管理员代改不改归属）。"""
+        if not task or task.get("owner") or not user or self.is_admin(user):
+            return
+        cur.execute(
+            "UPDATE account_item_tasks SET owner = %s, updated_at = %s"
+            " WHERE id = %s AND COALESCE(owner, '') = ''",
+            (user["username"], now_ms(), task["id"]),
+        )
+
+    def progress_task_status(self, body, user):
+        """把某个细分任务改成 未开始 / 办理中 / 已办结 / 已取消。"""
+        task_id = int(body.get("id") or 0)
+        status = str(body.get("status") or "").strip()
+        if not task_id or status not in TASK_STATUS_LABELS:
+            self.send_json({"code": 50000, "message": "缺少细分任务 id 或状态不合法"})
+            return
+        stamp = now_ms()
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM account_item_tasks WHERE id = %s FOR UPDATE", (task_id,))
+                row = cur.fetchone()
+                if row is None:
+                    self.send_json({"code": 50000, "message": "细分任务不存在"})
+                    return
+                if not self.task_edit_allowed(user, row):
+                    self.send_json({
+                        "code": 50000,
+                        "message": "这条子任务的跟进人是 %s，只有跟进人本人或管理员能改" % (row.get("owner") or "—"),
+                    })
+                    return
+                cur.execute(
+                    """
+                    UPDATE account_item_tasks
+                       SET status = %s,
+                           done_at = CASE WHEN %s = 'done' THEN COALESCE(done_at, %s) ELSE NULL END,
+                           owner = COALESCE(NULLIF(owner, ''), %s),
+                           updated_at = %s
+                     WHERE id = %s RETURNING *
+                    """,
+                    (status, status, stamp, user["username"] if user else "", stamp, task_id),
+                )
+                row = cur.fetchone()
+                summary = self.item_task_summary(cur, row["item_id"])
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"task": task_out(row), "summary": summary}})
+
+    def progress_task_add(self, body, user):
+        """手工补一条细分任务（业务项里没有的临时事项）。"""
+        item_id = int(body.get("item_id") or 0)
+        name = str(body.get("name") or "").strip()[:60]
+        if not item_id or not name:
+            self.send_json({"code": 50000, "message": "缺少任务 id 或细分任务名称"})
+            return
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT id, account_id FROM account_items WHERE id = %s", (item_id,))
+                item = cur.fetchone()
+                if item is None:
+                    self.send_json({"code": 50000, "message": "任务不存在"})
+                    return
+                cur.execute(
+                    "SELECT COALESCE(MAX(sort), -1) + 1 AS next FROM account_item_tasks WHERE item_id = %s",
+                    (item_id,),
+                )
+                sort = int(cur.fetchone()["next"] or 0)
+                cur.execute(
+                    """
+                    INSERT INTO account_item_tasks
+                           (item_id, account_id, name, line, status, owner, updated_at, sort, source)
+                    VALUES (%s, %s, %s, %s, 'pending', %s, %s, %s, 'manual')
+                    RETURNING *
+                    """,
+                    (item_id, item["account_id"], name, task_line_of(name),
+                     user["username"] if user else "", now_ms(), sort),
+                )
+                row = cur.fetchone()
+                summary = self.item_task_summary(cur, item_id)
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"task": task_out(row), "summary": summary}})
+
+    def progress_task_delete(self, body, user=None):
+        item_id = int(body.get("id") or 0)
+        if not item_id:
+            self.send_json({"code": 50000, "message": "缺少细分任务 id"})
+            return
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM account_item_tasks WHERE id = %s", (item_id,))
+                row = cur.fetchone()
+                if row is None:
+                    self.send_json({"code": 50000, "message": "细分任务不存在"})
+                    return
+                if not self.task_edit_allowed(user, row):
+                    self.send_json({
+                        "code": 50000,
+                        "message": "这条子任务的跟进人是 %s，只有跟进人本人或管理员能删" % (row.get("owner") or "—"),
+                    })
+                    return
+                task_item = row["item_id"]
+                cur.execute("DELETE FROM account_item_tasks WHERE id = %s", (item_id,))
+                summary = self.item_task_summary(cur, task_item)
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"summary": summary}})
+
+    def progress_task_owner(self, body, user):
+        """子任务的跟进人：管理员可改给任何人；当前跟进人可以把任务转给别人。
+
+        留空表示回到「未分配」，之后谁先动手谁认领。
+        """
+        task_id = int(body.get("id") or 0)
+        owner = str(body.get("owner") or "").strip()[:60]
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM account_item_tasks WHERE id = %s FOR UPDATE", (task_id,))
+                row = cur.fetchone()
+                if row is None:
+                    self.send_json({"code": 50000, "message": "细分任务不存在"})
+                    return
+                username = (user or {}).get("username") or ""
+                current = (row.get("owner") or "").strip()
+                if not self.is_admin(user) and current and current != username:
+                    self.send_json({
+                        "code": 50000,
+                        "message": "只有跟进人本人或管理员能转派这条子任务",
+                    })
+                    return
+                cur.execute(
+                    "UPDATE account_item_tasks SET owner = %s, updated_at = %s WHERE id = %s RETURNING *",
+                    (owner, now_ms(), task_id),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"task": task_out(row)}})
 
     # ---------------- 成本记录 ----------------
 
@@ -2761,12 +4486,8 @@ class App(BaseHTTPRequestHandler):
         }
 
     def cost_list(self, query):
-        # 默认只看正常数据；include_deleted=1 时把已删除的也带出来供核对/恢复
-        include_deleted = str((query or {}).get("include_deleted") or "") in ("1", "true", "yes")
         where = []
         params = []
-        if not include_deleted:
-            where.append("COALESCE(is_delete, 0) = 0")
         keyword = (query.get("keyword") or "").strip()
         if keyword:
             where.append("(payee ILIKE %s OR remark ILIKE %s OR category ILIKE %s)")
@@ -2803,15 +4524,12 @@ class App(BaseHTTPRequestHandler):
         month = (query.get("month") or "").strip()
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS amount"
-                    " FROM cost_records WHERE is_delete = 0"
-                )
+                cur.execute("SELECT COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS amount FROM cost_records")
                 overall = cur.fetchone()
                 if month:
                     cur.execute(
                         "SELECT COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS amount"
-                        " FROM cost_records WHERE is_delete = 0 AND LEFT(biz_date, 7) = %s",
+                        " FROM cost_records WHERE LEFT(biz_date, 7) = %s",
                         (month,),
                     )
                     month_row = cur.fetchone()
@@ -2820,7 +4538,7 @@ class App(BaseHTTPRequestHandler):
                 cur.execute("""
                     SELECT COALESCE(NULLIF(category, ''), '未分类') AS category,
                            COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS amount
-                      FROM cost_records WHERE is_delete = 0 GROUP BY 1 ORDER BY amount DESC
+                      FROM cost_records GROUP BY 1 ORDER BY amount DESC
                 """)
                 by_category = [
                     {"category": row["category"], "count": int(row["cnt"]), "amount": float(row["amount"] or 0)}
@@ -2829,7 +4547,7 @@ class App(BaseHTTPRequestHandler):
                 cur.execute("""
                     SELECT COALESCE(NULLIF(biz_date, ''), '未填日期') AS biz_date,
                            COALESCE(SUM(amount), 0) AS amount
-                      FROM cost_records WHERE is_delete = 0 GROUP BY 1 ORDER BY 1 DESC LIMIT 6
+                      FROM cost_records GROUP BY 1 ORDER BY 1 DESC LIMIT 6
                 """)
                 by_date = [{"biz_date": row["biz_date"], "amount": float(row["amount"] or 0)} for row in cur.fetchall()]
         self.send_json({
@@ -2855,23 +4573,19 @@ class App(BaseHTTPRequestHandler):
         now = datetime.now()
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM account_records WHERE is_delete = 0 ORDER BY id DESC")
+                cur.execute("SELECT * FROM account_records ORDER BY id DESC")
                 accounts = cur.fetchall()
-                cur.execute("SELECT * FROM cost_records WHERE is_delete = 0")
+                cur.execute("SELECT * FROM cost_records")
                 costs = cur.fetchall()
                 cur.execute(
                     """
                     SELECT DISTINCT ON (account_id) account_id, step, status, note, timestamp
                       FROM order_progress
-                     WHERE is_delete = 0
                      ORDER BY account_id, timestamp DESC, id DESC
                     """
                 )
                 latest = {row["account_id"]: row for row in cur.fetchall()}
-                cur.execute(
-                    "SELECT account_id, COUNT(*) AS cnt FROM order_progress"
-                    " WHERE is_delete = 0 GROUP BY account_id"
-                )
+                cur.execute("SELECT account_id, COUNT(*) AS cnt FROM order_progress GROUP BY account_id")
                 counts = {row["account_id"]: int(row["cnt"] or 0) for row in cur.fetchall()}
 
         months = [shift_month(now, offset).strftime("%Y-%m") for offset in range(-5, 1)]
@@ -2879,6 +4593,13 @@ class App(BaseHTTPRequestHandler):
 
         revenue_total = 0.0
         order_cost_total = 0.0
+        # 收入按订单状态拆开：已完成才是真收入，进行中算在途，待定单独看
+        revenue_done = 0.0
+        order_cost_done = 0.0
+        revenue_doing = 0.0
+        revenue_pending = 0.0
+        revenue_other = 0.0
+        month_done_revenue = 0.0
         by_category = {}
         by_status = {"pending": 0, "doing": 0, "done": 0}
         by_client = {}
@@ -2886,13 +4607,32 @@ class App(BaseHTTPRequestHandler):
         for row in accounts:
             revenue = float(row["revenue"] or 0)
             cost = float(row["cost"] or 0)
+            status = row["status"] or "pending"
             revenue_total += revenue
             order_cost_total += cost
+            if status == "done":
+                revenue_done += revenue
+                order_cost_done += cost
+            elif status == "doing":
+                revenue_doing += revenue
+            elif status == "pending":
+                revenue_pending += revenue
+            else:
+                # 已退款 / 取消订单：金额一般已冲成 0，单独归一类，不混进在途和待定
+                revenue_other += revenue
             month = biz_month_key(row["biz_date"], row.get("created_at"))
             if month in trend:
-                trend[month]["revenue"] += revenue
-                trend[month]["cost"] += cost
+                # 趋势图的「订单数」仍按下单月统计（开单量）；收支按下面完成月的口径走
                 trend[month]["orders"] += 1
+            # 订单哪个月完成，收入就算哪个月：已完成订单的收入 / 成本都归完成月；
+            # 在途订单的钱还没赚到，收入不进趋势，成本也不摊进月度利润
+            if status == "done":
+                month = ms_month_key(row.get("completed_at")) or month
+                if month in trend:
+                    trend[month]["revenue"] += revenue
+                    trend[month]["cost"] += cost
+                    trend[month]["done_revenue"] = trend[month].get("done_revenue", 0.0) + revenue
+                    trend[month]["done_cost"] = trend[month].get("done_cost", 0.0) + cost
             category = (row["category"] or "").strip() or "未分类"
             bucket = by_category.setdefault(
                 category, {"name": category, "revenue": 0.0, "cost": 0.0, "profit": 0.0, "count": 0}
@@ -2901,7 +4641,6 @@ class App(BaseHTTPRequestHandler):
             bucket["cost"] += cost
             bucket["profit"] += revenue - cost
             bucket["count"] += 1
-            status = row["status"] or "pending"
             by_status[status] = by_status.get(status, 0) + 1
             client = (row["client"] or "").strip() or "散客"
             client_bucket = by_client.setdefault(
@@ -2914,11 +4653,15 @@ class App(BaseHTTPRequestHandler):
         extra_cost_total = 0.0
         cost_by_category = {}
         for row in costs:
+            # 退款已在订单收入里冲减，首页再算一次支出会把利润扣重
+            if (row.get("kind") or "") == "refund":
+                continue
             amount = float(row["amount"] or 0)
             extra_cost_total += amount
             month = biz_month_key(row["biz_date"], row.get("created_at"))
             if month in trend:
                 trend[month]["cost"] += amount
+                trend[month]["extra_cost"] = trend[month].get("extra_cost", 0.0) + amount
             category = (row["category"] or "").strip() or "未分类"
             bucket = cost_by_category.setdefault(category, {"name": category, "amount": 0.0, "count": 0})
             bucket["amount"] += amount
@@ -2929,9 +4672,31 @@ class App(BaseHTTPRequestHandler):
 
         total_cost = order_cost_total + extra_cost_total
         profit_total = revenue_total - total_cost
+        # 首页「总收入 / 净利润」按已完成订单口径：执照任务没全部办结的订单，
+        # 钱还没赚到，收入不进总收入，成本也不参与毛利
+        profit_done = revenue_done - order_cost_done - extra_cost_total
+        # 和净利润对得上的支出：已完成订单成本 + 其他支出（在途订单成本单独摆出来，免得对不上账）
+        total_cost_done = order_cost_done + extra_cost_total
+        order_cost_open = order_cost_total - order_cost_done
+        done_count = by_status.get("done", 0)
+        doing_count = by_status.get("doing", 0)
+        pending_count = by_status.get("pending", 0)
         orders = len(accounts)
         current, previous = months[-1], months[-2]
         month_revenue = trend[current]["revenue"]
+        month_done_revenue = trend[current].get("done_revenue", 0.0)
+        prev_done_revenue = trend[previous].get("done_revenue", 0.0)
+        done_growth = (
+            round((month_done_revenue - prev_done_revenue) / prev_done_revenue * 100, 1)
+            if prev_done_revenue else None
+        )
+        month_cost = trend[current]["cost"]
+        # 本月「已完成口径」毛利：只算已办结订单的收入与成本，其他支出全算
+        month_profit_done = (
+            month_done_revenue
+            - trend[current].get("done_cost", 0.0)
+            - trend[current].get("extra_cost", 0.0)
+        )
         prev_revenue = trend[previous]["revenue"]
         growth = round((month_revenue - prev_revenue) / prev_revenue * 100, 1) if prev_revenue else None
 
@@ -2997,21 +4762,48 @@ class App(BaseHTTPRequestHandler):
             "code": 20000,
             "data": {
                 "kpi": {
+                    # revenue / profit 仍是全部订单口径，给图表和其它地方用
                     "revenue": money(revenue_total),
-                    "order_cost": money(order_cost_total),
-                    "extra_cost": money(extra_cost_total),
-                    "total_cost": money(total_cost),
                     "profit": money(profit_total),
                     "margin": round(profit_total / revenue_total * 100, 1) if revenue_total else 0,
+                    # 已完成订单口径：首页「总收入 / 净利润」按这个显示
+                    "revenue_done": money(revenue_done),
+                    "profit_done": money(profit_done),
+                    "margin_done": round(profit_done / revenue_done * 100, 1) if revenue_done else 0,
+                    # 在途（进行中）与待定订单的金额
+                    "revenue_doing": money(revenue_doing),
+                    "revenue_pending": money(revenue_pending),
+                    "revenue_other": money(revenue_other),
+                    "count_done": done_count,
+                    "count_doing": doing_count,
+                    "count_pending": pending_count,
+                    "avg_done": money(revenue_done / done_count) if done_count else 0,
+                    "avg_doing": money(revenue_doing / doing_count) if doing_count else 0,
+                    "avg_pending": money(revenue_pending / pending_count) if pending_count else 0,
+                    "month_revenue_done": money(month_done_revenue),
+                    "month_done_growth": done_growth,
+                    "month_profit_done": money(month_profit_done),
+                    "order_cost": money(order_cost_total),
+                    # 已完成订单对应的成本，净利润口径用它，避免在途订单的成本摊进毛利
+                    "order_cost_done": money(order_cost_done),
+                    # 在途（未办结）订单的成本，不进净利润，单独展示好对账
+                    "order_cost_open": money(order_cost_open),
+                    "extra_cost": money(extra_cost_total),
+                    "total_cost": money(total_cost),
+                    # 与净利润同口径的支出：已完成订单成本 + 其他支出
+                    "total_cost_done": money(total_cost_done),
+                    # 本月已完成口径的三段（收入 / 订单成本 / 其他支出）
+                    "month_order_cost_done": money(trend[current].get("done_cost", 0.0)),
+                    "month_extra_cost": money(trend[current].get("extra_cost", 0.0)),
                     "orders": orders,
                     "avg_ticket": money(revenue_total / orders) if orders else 0,
                     "month_revenue": money(month_revenue),
-                    "month_cost": money(trend[current]["cost"]),
+                    "month_cost": money(month_cost),
                     "month_profit": money(trend[current]["profit"]),
                     "month_growth": growth,
                     "open_orders": len(todos),
                     "risk_orders": len([item for item in todos if item["level"] == "danger"]),
-                    "pending_orders": by_status.get("pending", 0),
+                    "pending_orders": pending_count,
                 },
                 "trend": {
                     "months": months,
@@ -3036,6 +4828,8 @@ class App(BaseHTTPRequestHandler):
                     {"key": "pending", "name": "待定", "count": by_status.get("pending", 0)},
                     {"key": "doing", "name": "进行中", "count": by_status.get("doing", 0)},
                     {"key": "done", "name": "已完成", "count": by_status.get("done", 0)},
+                    {"key": "refunded", "name": "已退款", "count": by_status.get("refunded", 0)},
+                    {"key": "cancelled", "name": "取消订单", "count": by_status.get("cancelled", 0)},
                 ],
                 "step_dist": step_dist,
                 "todos": todos[:20],
@@ -3071,10 +4865,7 @@ class App(BaseHTTPRequestHandler):
         record_id = int(body.get("id") or 0)
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT * FROM cost_records WHERE id = %s AND is_delete = 0",
-                    (record_id,),
-                )
+                cur.execute("SELECT * FROM cost_records WHERE id = %s", (record_id,))
                 existing = cur.fetchone()
                 if existing is None:
                     self.send_json({"code": 50000, "message": "成本记录不存在"})
@@ -3100,24 +4891,9 @@ class App(BaseHTTPRequestHandler):
         self.send_json({"code": 20000, "data": cost_out(row)})
 
     def cost_delete(self, body):
-        """软删除：只标记状态，不删库。"""
         with connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE cost_records SET is_delete = 1 WHERE id = %s AND is_delete = 0",
-                    (int(body.get("id") or 0),),
-                )
-            conn.commit()
-        self.send_json({"code": 20000, "data": "success"})
-
-    def cost_restore(self, body):
-        """恢复一条已删除的支出记录。"""
-        with connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE cost_records SET is_delete = 0 WHERE id = %s AND is_delete = 1",
-                    (int(body.get("id") or 0),),
-                )
+                cur.execute("DELETE FROM cost_records WHERE id = %s", (int(body.get("id") or 0),))
             conn.commit()
         self.send_json({"code": 20000, "data": "success"})
 
@@ -3240,8 +5016,7 @@ class App(BaseHTTPRequestHandler):
                 cur.execute(
                     """
                     SELECT p.*,
-                           (SELECT COUNT(*) FROM account_records a
-                             WHERE a.platform = p.name AND a.is_delete = 0) AS order_count
+                           (SELECT COUNT(*) FROM account_records a WHERE a.platform = p.name) AS order_count
                       FROM platforms p
                     """ + where_sql + " ORDER BY p.sort ASC, p.id ASC",
                     params,
@@ -3320,11 +5095,7 @@ class App(BaseHTTPRequestHandler):
                     self.send_json({"code": 50000, "message": "平台不存在"})
                     return
                 # 仅当没有订单使用该平台时才允许删除，避免历史订单的平台名失效
-                cur.execute(
-                    "SELECT COUNT(*) AS total FROM account_records"
-                    " WHERE platform = %s AND is_delete = 0",
-                    (row["name"],),
-                )
+                cur.execute("SELECT COUNT(*) AS total FROM account_records WHERE platform = %s", (row["name"],))
                 if cur.fetchone()["total"] > 0:
                     self.send_json({"code": 50000, "message": "该平台已有订单使用，无法删除，可改为停用名称或在订单里调整"})
                     return
@@ -3337,10 +5108,7 @@ class App(BaseHTTPRequestHandler):
 
     def biz_item_usage(self, cur):
         """统计每个业务项被多少条执照明细用到：按 + 拆开再数，避免「解非」误命中「税务非正常解除」。"""
-        cur.execute(
-            "SELECT items FROM account_items"
-            " WHERE COALESCE(items, '') <> '' AND is_delete = 0"
-        )
+        cur.execute("SELECT items FROM account_items WHERE COALESCE(items, '') <> ''")
         usage = {}
         for row in cur.fetchall():
             text = row["items"] if isinstance(row, dict) else row[0]
@@ -3497,6 +5265,250 @@ class App(BaseHTTPRequestHandler):
                     })
                     return
                 cur.execute("DELETE FROM biz_items WHERE id = %s", (item_id,))
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    # ---------------- 价格配置 ----------------
+
+    def price_rows(self, cur, keyword="", category="", only_active=False):
+        where = []
+        params = []
+        if keyword:
+            like = "%" + keyword + "%"
+            where.append("(name ILIKE %s OR condition ILIKE %s OR category ILIKE %s OR remark ILIKE %s)")
+            params.extend([like] * 4)
+        if category:
+            where.append("category = %s")
+            params.append(category)
+        if only_active:
+            where.append("active = TRUE")
+        sql = "SELECT * FROM price_items"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY sort ASC, id ASC"
+        cur.execute(sql, params)
+        return cur.fetchall()
+
+    def price_out(self, row):
+        price = float(row["price"] or 0)
+        peer = float(row["peer_price"] or 0)
+        return {
+            "id": row["id"],
+            "category": row["category"] or "",
+            "name": row["name"],
+            "condition": row["condition"] or "",
+            "price": price,
+            "peer_price": peer,
+            # 与同行价对比：负数是比同行便宜，正数是比同行贵，供查看页直观标色
+            "diff": round(price - peer, 2),
+            "remark": row["remark"] or "",
+            "sort": int(row["sort"] or 0),
+            "active": bool(row["active"]),
+            "updated_at": int(row["updated_at"].timestamp() * 1000) if row["updated_at"] else 0,
+        }
+
+    def price_categories(self, cur):
+        """类别顺序按预置顺序排，后加的自定义类别排在后面。"""
+        cur.execute("SELECT DISTINCT category FROM price_items WHERE COALESCE(category, '') <> ''")
+        present = [row["category"] for row in cur.fetchall()]
+        ordered = [name for name in PRICE_CATEGORY_ORDER if name in present]
+        ordered.extend(sorted(name for name in present if name not in PRICE_CATEGORY_ORDER))
+        return ordered
+
+    def price_list(self, query=None):
+        query = query or {}
+        keyword = (query.get("keyword") or "").strip()
+        category = (query.get("category") or "").strip()
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                rows = self.price_rows(cur, keyword, category)
+                categories = self.price_categories(cur)
+                cur.execute("SELECT key, value FROM price_settings")
+                settings = {row["key"]: row["value"] or "" for row in cur.fetchall()}
+                # 全量口径的统计，不受搜索条件影响，避免数字随筛选跳动
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS total,
+                           COUNT(*) FILTER (WHERE active) AS active_total,
+                           COALESCE(AVG(price), 0) AS avg_price,
+                           COALESCE(MIN(price), 0) AS min_price,
+                           COALESCE(MAX(price), 0) AS max_price,
+                           COUNT(*) FILTER (WHERE price < peer_price AND peer_price > 0) AS cheaper_total
+                      FROM price_items
+                    """
+                )
+                stat = cur.fetchone()
+        items = [self.price_out(row) for row in rows]
+        stats = {
+            "total": int(stat["total"] or 0),
+            "active_total": int(stat["active_total"] or 0),
+            "avg_price": round(float(stat["avg_price"] or 0), 2),
+            "min_price": float(stat["min_price"] or 0),
+            "max_price": float(stat["max_price"] or 0),
+            "cheaper_total": int(stat["cheaper_total"] or 0),
+        }
+        self.send_json({
+            "code": 20000,
+            "data": {
+                "items": items,
+                "categories": categories,
+                "settings": {
+                    "notice": settings.get("notice", ""),
+                    "tips": settings.get("tips", ""),
+                },
+                "stats": stats,
+            },
+        })
+
+    def price_payload(self, body):
+        """校验并整理前端提交的价目字段，返回 (payload, 错误信息)。"""
+        name = (body.get("name") or "").strip()
+        category = (body.get("category") or "").strip()
+        if not name:
+            return None, "服务项目名称不能为空"
+        if not category:
+            return None, "类别不能为空"
+        try:
+            price = float(body.get("price") or 0)
+            peer_price = float(body.get("peer_price") or 0)
+        except (TypeError, ValueError):
+            return None, "价格必须是数字"
+        if price < 0 or peer_price < 0:
+            return None, "价格不能为负数"
+        return {
+            "name": name,
+            "category": category,
+            "condition": (body.get("condition") or "").strip(),
+            "price": price,
+            "peer_price": peer_price,
+            "remark": (body.get("remark") or "").strip(),
+            "sort": int(body.get("sort") or 0),
+            "active": bool(body.get("active", True)),
+        }, ""
+
+    def price_create(self, body, user):
+        if not self.is_admin(user):
+            self.deny("仅管理员可维护价格")
+            return
+        payload, message = self.price_payload(body)
+        if payload is None:
+            self.send_json({"code": 50000, "message": message})
+            return
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM price_items WHERE name = %s", (payload["name"],))
+                if cur.fetchone():
+                    self.send_json({"code": 50000, "message": "该服务项目已存在，直接改价即可"})
+                    return
+                sort = payload["sort"]
+                if not sort:
+                    # 新项目默认排在同类最后，保持用户手工排序的空间
+                    cur.execute(
+                        "SELECT COALESCE(MAX(sort), 0) FROM price_items WHERE category = %s",
+                        (payload["category"],),
+                    )
+                    sort = int(cur.fetchone()[0] or 0) + 10
+                cur.execute(
+                    """
+                    INSERT INTO price_items
+                           (category, name, condition, price, peer_price, remark, sort, active, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
+                    """,
+                    (
+                        payload["category"], payload["name"], payload["condition"],
+                        payload["price"], payload["peer_price"], payload["remark"],
+                        sort, payload["active"],
+                    ),
+                )
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    def price_update(self, body, user):
+        if not self.is_admin(user):
+            self.deny("仅管理员可维护价格")
+            return
+        item_id = int(body.get("id") or 0)
+        if not item_id:
+            self.send_json({"code": 50000, "message": "缺少价格记录 id"})
+            return
+        # 列表里的启用开关只改状态，其余字段不动
+        only_toggle = bool(body.get("only_toggle"))
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM price_items WHERE id = %s", (item_id,))
+                current = cur.fetchone()
+                if current is None:
+                    self.send_json({"code": 50000, "message": "价格记录不存在"})
+                    return
+                if only_toggle:
+                    cur.execute(
+                        "UPDATE price_items SET active = %s, updated_at = now() WHERE id = %s",
+                        (bool(body.get("active", True)), item_id),
+                    )
+                    conn.commit()
+                    self.send_json({"code": 20000, "data": {"status": "success"}})
+                    return
+                payload, message = self.price_payload(body)
+                if payload is None:
+                    self.send_json({"code": 50000, "message": message})
+                    return
+                cur.execute(
+                    "SELECT 1 FROM price_items WHERE name = %s AND id <> %s",
+                    (payload["name"], item_id),
+                )
+                if cur.fetchone():
+                    self.send_json({"code": 50000, "message": "已有同名服务项目"})
+                    return
+                cur.execute(
+                    """
+                    UPDATE price_items
+                       SET category = %s, name = %s, condition = %s, price = %s,
+                           peer_price = %s, remark = %s, sort = %s, active = %s,
+                           updated_at = now()
+                     WHERE id = %s
+                    """,
+                    (
+                        payload["category"], payload["name"], payload["condition"],
+                        payload["price"], payload["peer_price"], payload["remark"],
+                        payload["sort"] or int(current["sort"] or 0), payload["active"], item_id,
+                    ),
+                )
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    def price_delete(self, body, user):
+        if not self.is_admin(user):
+            self.deny("仅管理员可删除价格")
+            return
+        item_id = int(body.get("id") or 0)
+        if not item_id:
+            self.send_json({"code": 50000, "message": "缺少价格记录 id"})
+            return
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM price_items WHERE id = %s", (item_id,))
+            conn.commit()
+        self.send_json({"code": 20000, "data": {"status": "success"}})
+
+    def price_save_settings(self, body, user):
+        """保存价目表的免责声明与特别提醒（价格查看页顶部/底部展示）。"""
+        if not self.is_admin(user):
+            self.deny("仅管理员可修改价格说明")
+            return
+        with connect() as conn:
+            with conn.cursor() as cur:
+                for key in ("notice", "tips"):
+                    if key not in body:
+                        continue
+                    cur.execute(
+                        """
+                        INSERT INTO price_settings (key, value, updated_at)
+                        VALUES (%s, %s, now())
+                        ON CONFLICT (key) DO UPDATE
+                           SET value = EXCLUDED.value, updated_at = now()
+                        """,
+                        (key, str(body.get(key) or "")),
+                    )
             conn.commit()
         self.send_json({"code": 20000, "data": {"status": "success"}})
 
