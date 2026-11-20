@@ -618,7 +618,7 @@ export default {
         })
     },
     removeProgress(item) {
-      this.$confirm('确认删除这条跟进记录吗？', '提示', {
+      this.$confirm('确认删除这条跟进记录吗？删除后只是标记为「已删除」，数据仍保留在数据库里。', '提示', {
         confirmButtonText: '确定',
         cancelButtonText: '取消',
         type: 'warning'

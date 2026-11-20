@@ -862,12 +862,16 @@ export default {
       this.detailVisible = true
     },
     handleDelete(row) {
-      const suffix = row.license_count > 1 ? `（含 ${row.license_count} 个执照任务，进度一并删除）` : ''
-      this.$confirm(`确认删除这条订单吗？${suffix}`, '提示', {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      })
+      const suffix = row.license_count > 1 ? `（含 ${row.license_count} 个执照任务，进度一并停止显示）` : ''
+      this.$confirm(
+        `确认删除这条订单吗？${suffix}删除后只是标记为「已删除」，订单、执照与进度都会保留在数据库里。`,
+        '提示',
+        {
+          confirmButtonText: '确定',
+          cancelButtonText: '取消',
+          type: 'warning'
+        }
+      )
         .then(() => deleteAccount(row.id))
         .then(() => {
           this.$message({ message: '删除成功', type: 'success' })

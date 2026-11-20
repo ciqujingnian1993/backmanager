@@ -508,6 +508,7 @@ def item_out(row):
         "created_at": int(created.timestamp() * 1000) if created else None,
         "remark": row.get("remark") or "",
         "sort": int(row.get("sort") or 0),
+        "deleted_at": int(row["deleted_at"]) if row.get("deleted_at") else None,
     }
 
 
@@ -518,7 +519,7 @@ def progress_snapshot(cur, item_ids):
         return {}
     cur.execute(
         "SELECT item_id, step, status, timestamp FROM order_progress"
-        " WHERE item_id = ANY(%s) ORDER BY timestamp DESC, id DESC",
+        " WHERE item_id = ANY(%s) AND deleted_at IS NULL ORDER BY timestamp DESC, id DESC",
         (ids,),
     )
     raw = {}
@@ -575,7 +576,8 @@ def fetch_details(cur, account_ids):
     if not ids:
         return {}
     cur.execute(
-        "SELECT * FROM account_items WHERE account_id = ANY(%s) ORDER BY account_id, sort, id",
+        "SELECT * FROM account_items WHERE account_id = ANY(%s)"
+        " AND deleted_at IS NULL ORDER BY account_id, sort, id",
         (ids,),
     )
     grouped = {}
@@ -594,6 +596,8 @@ def account_out(row, details=None):
         "id": row["id"],
         "order_no": row.get("order_no") or "",
         "platform_order_no": row.get("platform_order_no") or "",
+        "deleted_at": int(row["deleted_at"]) if row.get("deleted_at") else None,
+        "record_status": "deleted" if row.get("deleted_at") else "active",
         "timestamp": int(row["timestamp"] or 0),
         "biz_date": row["biz_date"] or "",
         "category": row["category"] or "",
@@ -662,6 +666,9 @@ def cost_out(row):
         "related_order": row["related_order"],
         "remark": row["remark"] or "",
         "creator": row["creator"] or "",
+        # 软删除：deleted_at 有值表示「已删除」，数据仍在库里，可恢复
+        "deleted_at": int(row["deleted_at"]) if row.get("deleted_at") else None,
+        "record_status": "deleted" if row.get("deleted_at") else "active",
     }
 
 
@@ -706,7 +713,7 @@ def recalc_order(cur, account_id):
                MAX(completed_at) FILTER (WHERE status = 'done') AS completed_at,
                string_agg(DISTINCT NULLIF(items, ''), '、') AS items
           FROM account_items
-         WHERE account_id = %s
+         WHERE account_id = %s AND deleted_at IS NULL
         """,
         (account_id,),
     )
@@ -746,7 +753,7 @@ def migrate_account_items(cur):
                a.unit_price, a.quantity, a.revenue, a.cost, a.profit,
                COALESCE(a.status, 'pending'), a.completed_at, a.remark, 0, a.created_at
           FROM account_records a
-         WHERE NOT EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id)
+         WHERE NOT EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND i.deleted_at IS NULL)
            AND (COALESCE(a.client, '') <> '' OR COALESCE(a.items, '') <> ''
                 OR COALESCE(a.license_name, '') <> '' OR a.revenue IS NOT NULL)
         """
@@ -765,7 +772,8 @@ def migrate_account_items(cur):
         """
         UPDATE order_progress p
            SET item_id = sub.id
-          FROM (SELECT account_id, MIN(id) AS id FROM account_items GROUP BY account_id) sub
+          FROM (SELECT account_id, MIN(id) AS id FROM account_items
+                 WHERE deleted_at IS NULL GROUP BY account_id) sub
          WHERE p.account_id = sub.account_id AND p.item_id IS NULL
         """
     )
@@ -1038,6 +1046,32 @@ def init_db():
         """
         UPDATE account_records SET category = '同行' WHERE category = '同行业'
         """,
+        # 软删除：所有业务数据只标记 deleted_at，永不物理删除，误删也能从库里恢复
+        """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS deleted_at bigint
+        """,
+        """
+        ALTER TABLE account_items ADD COLUMN IF NOT EXISTS deleted_at bigint
+        """,
+        """
+        ALTER TABLE order_progress ADD COLUMN IF NOT EXISTS deleted_at bigint
+        """,
+        """
+        ALTER TABLE cost_records ADD COLUMN IF NOT EXISTS deleted_at bigint
+        """,
+        # 给状态列写注释，库里直接能看出含义（NULL = 正常，有值 = 删除时间）
+        """
+        COMMENT ON COLUMN account_records.deleted_at IS '软删除时间戳(ms)，NULL=正常，有值=已删除'
+        """,
+        """
+        COMMENT ON COLUMN account_items.deleted_at IS '软删除时间戳(ms)，NULL=正常，有值=已删除'
+        """,
+        """
+        COMMENT ON COLUMN order_progress.deleted_at IS '软删除时间戳(ms)，NULL=正常，有值=已删除'
+        """,
+        """
+        COMMENT ON COLUMN cost_records.deleted_at IS '软删除时间戳(ms)，NULL=正常，有值=已删除'
+        """,
     ]
     with connect() as conn:
         with conn.cursor() as cur:
@@ -1129,7 +1163,10 @@ def split_biz_items(text):
 def seed_biz_items(cur):
     # 预置项 + 历史订单里已经用过的业务项，一起导入字典，升级后立刻可复用
     names = list(BIZ_ITEM_SEED)
-    cur.execute("SELECT DISTINCT items FROM account_items WHERE COALESCE(items, '') <> ''")
+    cur.execute(
+        "SELECT DISTINCT items FROM account_items"
+        " WHERE COALESCE(items, '') <> '' AND deleted_at IS NULL"
+    )
     for row in cur.fetchall():
         for name in split_biz_items(row["items"] if isinstance(row, dict) else row[0]):
             if name not in names:
@@ -1457,6 +1494,8 @@ class App(BaseHTTPRequestHandler):
             self.cost_update(body)
         elif path == "/vue-element-admin/cost/delete" and method == "POST":
             self.cost_delete(body)
+        elif path == "/vue-element-admin/cost/restore" and method == "POST":
+            self.cost_restore(body)
         elif path == "/upload" and method == "POST":
             self.upload(body)
         elif path == "/qiniu/upload/token" and method == "GET":
@@ -1841,14 +1880,16 @@ class App(BaseHTTPRequestHandler):
         self.send_json({"code": 20000, "data": "success"})
 
     def account_list(self, query):
-        where = []
+        # 基础条件：已删除的订单不出现在列表与总数里
+        where = ["COALESCE(a.deleted_at, 0) = 0"]
         params = []
         if query.get("keyword"):
             keyword = "%" + query["keyword"] + "%"
             where.append(
                 "(a.client ILIKE %s OR a.items ILIKE %s OR a.category ILIKE %s OR a.remark ILIKE %s"
                 " OR a.phone ILIKE %s OR a.order_no ILIKE %s OR a.platform_order_no ILIKE %s"
-                " OR EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND ("
+                " OR EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id"
+                " AND i.deleted_at IS NULL AND ("
                 " i.license_name ILIKE %s OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s"
                 " OR i.legal_phone ILIKE %s OR i.items ILIKE %s)))"
             )
@@ -1870,12 +1911,14 @@ class App(BaseHTTPRequestHandler):
             # 工商状态可多选，库里是「正常,另册管理」这类逗号串，按元素命中
             where.append(
                 "EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id"
+                " AND i.deleted_at IS NULL"
                 " AND %s = ANY(string_to_array(COALESCE(i.biz_status, ''), ',')))"
             )
             params.append(query["biz_status"])
         if query.get("tax_status"):
             where.append(
-                "EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id AND i.tax_status = %s)"
+                "EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id"
+                " AND i.deleted_at IS NULL AND i.tax_status = %s)"
             )
             params.append(query["tax_status"])
         if query.get("month"):
@@ -1906,7 +1949,10 @@ class App(BaseHTTPRequestHandler):
     def account_detail(self, query):
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM account_records WHERE id = %s", (int(query.get("id") or 0),))
+                cur.execute(
+                    "SELECT * FROM account_records WHERE id = %s AND deleted_at IS NULL",
+                    (int(query.get("id") or 0),),
+                )
                 row = cur.fetchone()
                 if row is None:
                     self.send_json({"code": 50000, "message": "Record not found"})
@@ -1915,12 +1961,13 @@ class App(BaseHTTPRequestHandler):
         self.send_json({"code": 20000, "data": account_out(row, grouped.get(row["id"], []))})
 
     def account_summary(self, query=None):
-        where_sql = ""
+        where = ["deleted_at IS NULL"]
         params = []
         if query and query.get("month"):
             month = str(query["month"]).split("-")[-1].strip()
-            where_sql = " WHERE (biz_date LIKE %s OR biz_date LIKE %s)"
+            where.append("(biz_date LIKE %s OR biz_date LIKE %s)")
             params = [month + "/%", "%-" + month + "-%"]
+        where_sql = " WHERE " + " AND ".join(where)
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
@@ -2066,7 +2113,10 @@ class App(BaseHTTPRequestHandler):
 
     def sync_details(self, cur, account_id, details, operator, account_record):
         """按提交的明细做增删改：保留 id 的更新，无 id 的新建，未提交的删除（进度级联删除）。"""
-        cur.execute("SELECT * FROM account_items WHERE account_id = %s ORDER BY sort, id", (account_id,))
+        cur.execute(
+            "SELECT * FROM account_items WHERE account_id = %s AND deleted_at IS NULL ORDER BY sort, id",
+            (account_id,),
+        )
         existing = {row["id"]: row for row in cur.fetchall()}
         kept = []
         position = 0
@@ -2115,7 +2165,10 @@ class App(BaseHTTPRequestHandler):
             position += 1
         removed = [item_id for item_id in existing if item_id not in kept]
         if removed:
-            cur.execute("DELETE FROM account_items WHERE id = ANY(%s)", (removed,))
+            cur.execute(
+                "UPDATE account_items SET deleted_at = %s WHERE id = ANY(%s) AND deleted_at IS NULL",
+                (now_ms(), removed),
+            )
         recalc_order(cur, account_id)
 
     def account_create(self, body, user):
@@ -2163,7 +2216,10 @@ class App(BaseHTTPRequestHandler):
         record_id = int(body.get("id") or 0)
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM account_records WHERE id = %s", (record_id,))
+                cur.execute(
+                    "SELECT * FROM account_records WHERE id = %s AND deleted_at IS NULL",
+                    (record_id,),
+                )
                 existing = cur.fetchone()
                 if existing is None:
                     self.send_json({"code": 50000, "message": "Record not found"})
@@ -2209,9 +2265,23 @@ class App(BaseHTTPRequestHandler):
         self.send_json({"code": 20000, "data": account_out(row, grouped.get(record_id, []))})
 
     def account_delete(self, body):
+        """软删除：只把订单及其明细、进度标记为已删除，数据永久留在库里。"""
+        record_id = int(body.get("id") or 0)
+        stamp = now_ms()
         with connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM account_records WHERE id = %s", (int(body.get("id") or 0),))
+                cur.execute(
+                    "UPDATE account_records SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                    (stamp, record_id),
+                )
+                cur.execute(
+                    "UPDATE account_items SET deleted_at = %s WHERE account_id = %s AND deleted_at IS NULL",
+                    (stamp, record_id),
+                )
+                cur.execute(
+                    "UPDATE order_progress SET deleted_at = %s WHERE account_id = %s AND deleted_at IS NULL",
+                    (stamp, record_id),
+                )
             conn.commit()
         self.send_json({"code": 20000, "data": "success"})
 
@@ -2228,18 +2298,23 @@ class App(BaseHTTPRequestHandler):
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 if item_id:
                     cur.execute(
-                        "SELECT * FROM order_progress WHERE item_id = %s ORDER BY timestamp ASC, id ASC",
+                        "SELECT * FROM order_progress WHERE item_id = %s AND deleted_at IS NULL"
+                        " ORDER BY timestamp ASC, id ASC",
                         (item_id,),
                     )
                 else:
                     cur.execute(
-                        "SELECT * FROM order_progress WHERE account_id = %s ORDER BY timestamp ASC, id ASC",
+                        "SELECT * FROM order_progress WHERE account_id = %s AND deleted_at IS NULL"
+                        " ORDER BY timestamp ASC, id ASC",
                         (account_id,),
                     )
                 items = [progress_out(row) for row in cur.fetchall()]
                 item = None
                 if item_id:
-                    cur.execute("SELECT * FROM account_items WHERE id = %s", (item_id,))
+                    cur.execute(
+                        "SELECT * FROM account_items WHERE id = %s AND deleted_at IS NULL",
+                        (item_id,),
+                    )
                     item_row = cur.fetchone()
                     if item_row is not None:
                         cur.execute("SELECT * FROM account_records WHERE id = %s", (item_row["account_id"],))
@@ -2263,7 +2338,8 @@ class App(BaseHTTPRequestHandler):
 
     def progress_overview(self, query):
         """任务总览：一行 = 一条执照明细，带该任务最新进度。"""
-        where = []
+        # 已删除的订单与明细都不出现在任务总览里
+        where = ["COALESCE(i.deleted_at, 0) = 0", "COALESCE(a.deleted_at, 0) = 0"]
         params = []
         keyword = (query.get("keyword") or "").strip()
         if keyword:
@@ -2304,13 +2380,13 @@ class App(BaseHTTPRequestHandler):
               JOIN account_records a ON a.id = i.account_id
               LEFT JOIN LATERAL (
                    SELECT * FROM order_progress
-                    WHERE item_id = i.id
+                    WHERE item_id = i.id AND deleted_at IS NULL
                     ORDER BY timestamp DESC, id DESC
                     LIMIT 1
               ) p ON TRUE
               LEFT JOIN (
                    SELECT item_id, COUNT(*) AS cnt FROM order_progress
-                    WHERE item_id IS NOT NULL GROUP BY item_id
+                    WHERE item_id IS NOT NULL AND deleted_at IS NULL GROUP BY item_id
               ) c ON c.item_id = i.id
         """
         with connect() as conn:
@@ -2375,22 +2451,31 @@ class App(BaseHTTPRequestHandler):
                     SELECT step, COUNT(*) AS cnt FROM (
                         SELECT DISTINCT ON (item_id) item_id, step
                           FROM order_progress
-                         WHERE item_id IS NOT NULL
+                         WHERE item_id IS NOT NULL AND deleted_at IS NULL
                          ORDER BY item_id, timestamp DESC, id DESC
                     ) latest GROUP BY step ORDER BY cnt DESC, step
                 """)
                 by_step = [{"step": row["step"], "count": int(row["cnt"])} for row in cur.fetchall()]
-                cur.execute("SELECT COUNT(DISTINCT item_id) AS cnt FROM order_progress WHERE item_id IS NOT NULL")
+                cur.execute(
+                    "SELECT COUNT(DISTINCT item_id) AS cnt FROM order_progress"
+                    " WHERE item_id IS NOT NULL AND deleted_at IS NULL"
+                )
                 covered = int(cur.fetchone()["cnt"] or 0)
-                cur.execute("SELECT COUNT(*) AS cnt FROM account_items")
+                cur.execute("SELECT COUNT(*) AS cnt FROM account_items WHERE deleted_at IS NULL")
                 tasks = int(cur.fetchone()["cnt"] or 0)
-                cur.execute("SELECT COUNT(*) AS cnt FROM account_records")
+                cur.execute("SELECT COUNT(*) AS cnt FROM account_records WHERE deleted_at IS NULL")
                 orders = int(cur.fetchone()["cnt"] or 0)
-                cur.execute("SELECT COUNT(*) AS cnt FROM account_items WHERE status = 'done'")
+                cur.execute(
+                    "SELECT COUNT(*) AS cnt FROM account_items WHERE status = 'done' AND deleted_at IS NULL"
+                )
                 done = int(cur.fetchone()["cnt"] or 0)
                 cur.execute("""
                     SELECT COUNT(*) AS cnt FROM account_items i
-                     WHERE NOT EXISTS (SELECT 1 FROM order_progress p WHERE p.item_id = i.id)
+                     WHERE i.deleted_at IS NULL
+                       AND NOT EXISTS (
+                           SELECT 1 FROM order_progress p
+                            WHERE p.item_id = i.id AND p.deleted_at IS NULL
+                       )
                 """)
                 missing = int(cur.fetchone()["cnt"] or 0)
         self.send_json({
@@ -2428,9 +2513,9 @@ class App(BaseHTTPRequestHandler):
 
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM account_records")
+                cur.execute("SELECT * FROM account_records WHERE deleted_at IS NULL")
                 all_orders = cur.fetchall()
-                cur.execute("SELECT * FROM cost_records")
+                cur.execute("SELECT * FROM cost_records WHERE deleted_at IS NULL")
                 all_costs = cur.fetchall()
 
             if month is None:
@@ -2455,7 +2540,8 @@ class App(BaseHTTPRequestHandler):
             if order_ids:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(
-                        "SELECT * FROM account_items WHERE account_id = ANY(%s) ORDER BY account_id, sort, id",
+                        "SELECT * FROM account_items WHERE account_id = ANY(%s)"
+        " AND deleted_at IS NULL ORDER BY account_id, sort, id",
                         (order_ids,),
                     )
                     details = cur.fetchall()
@@ -2467,7 +2553,10 @@ class App(BaseHTTPRequestHandler):
             prev_details = []
             if prev_ids:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("SELECT * FROM account_items WHERE account_id = ANY(%s)", (prev_ids,))
+                    cur.execute(
+                        "SELECT * FROM account_items WHERE account_id = ANY(%s) AND deleted_at IS NULL",
+                        (prev_ids,),
+                    )
                     prev_details = cur.fetchall()
 
         summary = summarize(orders, costs, details)
@@ -2592,7 +2681,10 @@ class App(BaseHTTPRequestHandler):
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 item = None
                 if item_id:
-                    cur.execute("SELECT * FROM account_items WHERE id = %s", (item_id,))
+                    cur.execute(
+                        "SELECT * FROM account_items WHERE id = %s AND deleted_at IS NULL",
+                        (item_id,),
+                    )
                     item = cur.fetchone()
                     if item is None:
                         self.send_json({"code": 50000, "message": "任务不存在"})
@@ -2600,7 +2692,8 @@ class App(BaseHTTPRequestHandler):
                     account_id = item["account_id"]
                 else:
                     cur.execute(
-                        "SELECT * FROM account_items WHERE account_id = %s ORDER BY sort, id LIMIT 1",
+                        "SELECT * FROM account_items WHERE account_id = %s AND deleted_at IS NULL"
+                        " ORDER BY sort, id LIMIT 1",
                         (account_id,),
                     )
                     item = cur.fetchone()
@@ -2618,7 +2711,11 @@ class App(BaseHTTPRequestHandler):
                 elif status == "doing":
                     cur.execute("UPDATE account_items SET status = 'doing' WHERE id = %s AND status = 'pending'", (item_id,))
                 recalc_order(cur, account_id)
-                cur.execute("SELECT * FROM order_progress WHERE item_id = %s ORDER BY id DESC LIMIT 1", (item_id,))
+                cur.execute(
+                    "SELECT * FROM order_progress WHERE item_id = %s AND deleted_at IS NULL"
+                    " ORDER BY id DESC LIMIT 1",
+                    (item_id,),
+                )
                 row = cur.fetchone()
             conn.commit()
         self.send_json({"code": 20000, "data": progress_out(row)})
@@ -2626,7 +2723,10 @@ class App(BaseHTTPRequestHandler):
     def progress_delete(self, body):
         with connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM order_progress WHERE id = %s", (int(body.get("id") or 0),))
+                cur.execute(
+                    "UPDATE order_progress SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                    (now_ms(), int(body.get("id") or 0)),
+                )
             conn.commit()
         self.send_json({"code": 20000, "data": "success"})
 
@@ -2662,8 +2762,12 @@ class App(BaseHTTPRequestHandler):
         }
 
     def cost_list(self, query):
+        # 默认只看正常数据；include_deleted=1 时把已删除的也带出来供核对/恢复
+        include_deleted = str((query or {}).get("include_deleted") or "") in ("1", "true", "yes")
         where = []
         params = []
+        if not include_deleted:
+            where.append("COALESCE(deleted_at, 0) = 0")
         keyword = (query.get("keyword") or "").strip()
         if keyword:
             where.append("(payee ILIKE %s OR remark ILIKE %s OR category ILIKE %s)")
@@ -2700,12 +2804,15 @@ class App(BaseHTTPRequestHandler):
         month = (query.get("month") or "").strip()
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS amount FROM cost_records")
+                cur.execute(
+                    "SELECT COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS amount"
+                    " FROM cost_records WHERE deleted_at IS NULL"
+                )
                 overall = cur.fetchone()
                 if month:
                     cur.execute(
                         "SELECT COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS amount"
-                        " FROM cost_records WHERE LEFT(biz_date, 7) = %s",
+                        " FROM cost_records WHERE deleted_at IS NULL AND LEFT(biz_date, 7) = %s",
                         (month,),
                     )
                     month_row = cur.fetchone()
@@ -2714,7 +2821,7 @@ class App(BaseHTTPRequestHandler):
                 cur.execute("""
                     SELECT COALESCE(NULLIF(category, ''), '未分类') AS category,
                            COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS amount
-                      FROM cost_records GROUP BY 1 ORDER BY amount DESC
+                      FROM cost_records WHERE deleted_at IS NULL GROUP BY 1 ORDER BY amount DESC
                 """)
                 by_category = [
                     {"category": row["category"], "count": int(row["cnt"]), "amount": float(row["amount"] or 0)}
@@ -2723,7 +2830,7 @@ class App(BaseHTTPRequestHandler):
                 cur.execute("""
                     SELECT COALESCE(NULLIF(biz_date, ''), '未填日期') AS biz_date,
                            COALESCE(SUM(amount), 0) AS amount
-                      FROM cost_records GROUP BY 1 ORDER BY 1 DESC LIMIT 6
+                      FROM cost_records WHERE deleted_at IS NULL GROUP BY 1 ORDER BY 1 DESC LIMIT 6
                 """)
                 by_date = [{"biz_date": row["biz_date"], "amount": float(row["amount"] or 0)} for row in cur.fetchall()]
         self.send_json({
@@ -2749,19 +2856,23 @@ class App(BaseHTTPRequestHandler):
         now = datetime.now()
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM account_records ORDER BY id DESC")
+                cur.execute("SELECT * FROM account_records WHERE deleted_at IS NULL ORDER BY id DESC")
                 accounts = cur.fetchall()
-                cur.execute("SELECT * FROM cost_records")
+                cur.execute("SELECT * FROM cost_records WHERE deleted_at IS NULL")
                 costs = cur.fetchall()
                 cur.execute(
                     """
                     SELECT DISTINCT ON (account_id) account_id, step, status, note, timestamp
                       FROM order_progress
+                     WHERE deleted_at IS NULL
                      ORDER BY account_id, timestamp DESC, id DESC
                     """
                 )
                 latest = {row["account_id"]: row for row in cur.fetchall()}
-                cur.execute("SELECT account_id, COUNT(*) AS cnt FROM order_progress GROUP BY account_id")
+                cur.execute(
+                    "SELECT account_id, COUNT(*) AS cnt FROM order_progress"
+                    " WHERE deleted_at IS NULL GROUP BY account_id"
+                )
                 counts = {row["account_id"]: int(row["cnt"] or 0) for row in cur.fetchall()}
 
         months = [shift_month(now, offset).strftime("%Y-%m") for offset in range(-5, 1)]
@@ -2961,7 +3072,10 @@ class App(BaseHTTPRequestHandler):
         record_id = int(body.get("id") or 0)
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM cost_records WHERE id = %s", (record_id,))
+                cur.execute(
+                    "SELECT * FROM cost_records WHERE id = %s AND deleted_at IS NULL",
+                    (record_id,),
+                )
                 existing = cur.fetchone()
                 if existing is None:
                     self.send_json({"code": 50000, "message": "成本记录不存在"})
@@ -2987,9 +3101,24 @@ class App(BaseHTTPRequestHandler):
         self.send_json({"code": 20000, "data": cost_out(row)})
 
     def cost_delete(self, body):
+        """软删除：只标记状态，不删库。"""
         with connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM cost_records WHERE id = %s", (int(body.get("id") or 0),))
+                cur.execute(
+                    "UPDATE cost_records SET deleted_at = %s WHERE id = %s AND deleted_at IS NULL",
+                    (now_ms(), int(body.get("id") or 0)),
+                )
+            conn.commit()
+        self.send_json({"code": 20000, "data": "success"})
+
+    def cost_restore(self, body):
+        """恢复一条已删除的支出记录。"""
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE cost_records SET deleted_at = NULL WHERE id = %s AND deleted_at IS NOT NULL",
+                    (int(body.get("id") or 0),),
+                )
             conn.commit()
         self.send_json({"code": 20000, "data": "success"})
 
@@ -3112,7 +3241,8 @@ class App(BaseHTTPRequestHandler):
                 cur.execute(
                     """
                     SELECT p.*,
-                           (SELECT COUNT(*) FROM account_records a WHERE a.platform = p.name) AS order_count
+                           (SELECT COUNT(*) FROM account_records a
+                             WHERE a.platform = p.name AND a.deleted_at IS NULL) AS order_count
                       FROM platforms p
                     """ + where_sql + " ORDER BY p.sort ASC, p.id ASC",
                     params,
@@ -3191,7 +3321,11 @@ class App(BaseHTTPRequestHandler):
                     self.send_json({"code": 50000, "message": "平台不存在"})
                     return
                 # 仅当没有订单使用该平台时才允许删除，避免历史订单的平台名失效
-                cur.execute("SELECT COUNT(*) AS total FROM account_records WHERE platform = %s", (row["name"],))
+                cur.execute(
+                    "SELECT COUNT(*) AS total FROM account_records"
+                    " WHERE platform = %s AND deleted_at IS NULL",
+                    (row["name"],),
+                )
                 if cur.fetchone()["total"] > 0:
                     self.send_json({"code": 50000, "message": "该平台已有订单使用，无法删除，可改为停用名称或在订单里调整"})
                     return
@@ -3204,7 +3338,10 @@ class App(BaseHTTPRequestHandler):
 
     def biz_item_usage(self, cur):
         """统计每个业务项被多少条执照明细用到：按 + 拆开再数，避免「解非」误命中「税务非正常解除」。"""
-        cur.execute("SELECT items FROM account_items WHERE COALESCE(items, '') <> ''")
+        cur.execute(
+            "SELECT items FROM account_items"
+            " WHERE COALESCE(items, '') <> '' AND deleted_at IS NULL"
+        )
         usage = {}
         for row in cur.fetchall():
             text = row["items"] if isinstance(row, dict) else row[0]

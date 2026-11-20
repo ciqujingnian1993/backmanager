@@ -39,3 +39,11 @@ export function deleteCost(data) {
     data
   })
 }
+
+export function restoreCost(data) {
+  return request({
+    url: '/vue-element-admin/cost/restore',
+    method: 'post',
+    data
+  })
+}

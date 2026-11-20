@@ -68,6 +68,9 @@
         clearable
         @keyup.enter.native="handleFilter"
       />
+      <el-checkbox v-model="listQuery.include_deleted" class="filter-item deleted-check" @change="handleFilter">
+        显示已删除
+      </el-checkbox>
       <el-button v-if="!readonly" class="filter-item" type="primary" icon="el-icon-plus" @click="handleCreate">
         记一笔支出
       </el-button>
@@ -81,6 +84,7 @@
       border
       fit
       highlight-current-row
+      :row-class-name="rowClassName"
       style="width: 100%"
     >
       <el-table-column prop="biz_date" label="发生日期" width="120" align="center" />
@@ -104,10 +108,26 @@
       </el-table-column>
       <el-table-column prop="remark" label="备注" min-width="150" />
       <el-table-column prop="creator" label="记录人" width="100" align="center" />
+      <el-table-column v-if="listQuery.include_deleted" label="状态" width="88" align="center">
+        <template slot-scope="{ row }">
+          <el-tag v-if="row.record_status === 'deleted'" size="mini" type="info">已删除</el-tag>
+          <el-tag v-else size="mini" type="success" effect="plain">正常</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column v-if="!readonly" label="操作" width="170" align="center">
         <template slot-scope="{ row }">
-          <el-button type="primary" size="mini" @click="handleUpdate(row)">编辑</el-button>
-          <el-button type="danger" size="mini" @click="handleDelete(row)">删除</el-button>
+          <el-button
+            v-if="row.record_status === 'deleted'"
+            type="success"
+            size="mini"
+            @click="handleRestore(row)"
+          >
+            恢复
+          </el-button>
+          <template v-else>
+            <el-button type="primary" size="mini" @click="handleUpdate(row)">编辑</el-button>
+            <el-button type="danger" size="mini" @click="handleDelete(row)">删除</el-button>
+          </template>
         </template>
       </el-table-column>
     </el-table>
@@ -222,7 +242,7 @@
 
 <script>
 import Pagination from '@/components/Pagination'
-import { fetchCostList, fetchCostSummary, createCost, updateCost, deleteCost } from '@/api/cost'
+import { fetchCostList, fetchCostSummary, createCost, updateCost, deleteCost, restoreCost } from '@/api/cost'
 import { fetchAccountList } from '@/api/account'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
 
@@ -258,7 +278,8 @@ export default {
         limit: 20,
         month: '',
         category: '',
-        keyword: ''
+        keyword: '',
+        include_deleted: false
       },
       dialogVisible: false,
       dialogType: 'create',
@@ -329,7 +350,8 @@ export default {
           page: this.listQuery.page,
           limit: this.listQuery.limit,
           category: this.listQuery.category,
-          keyword: this.listQuery.keyword
+          keyword: this.listQuery.keyword,
+          include_deleted: this.listQuery.include_deleted ? 1 : ''
         }
         if (this.listQuery.month) {
           params.start = `${this.listQuery.month}-01`
@@ -381,18 +403,36 @@ export default {
         this.$refs.costForm && this.$refs.costForm.clearValidate()
       })
     },
+    // 软删除：只把记录标为「已删除」，数据仍留在库里，可随时恢复
     handleDelete(row) {
-      this.$confirm(`确认删除「${row.category || '该'} ￥${this.money(row.amount)}」这条成本记录吗？`, '提示', {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      })
+      this.$confirm(
+        `确认删除「${row.category || '该'} ￥${this.money(row.amount)}」这条成本记录吗？` +
+        '删除后只是标记为「已删除」，数据不会从数据库删掉，可随时恢复。',
+        '提示',
+        { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+      )
         .then(() => deleteCost({ id: row.id }))
         .then(() => {
-          this.$message.success('删除成功')
+          this.$message.success('已标记为删除')
           this.refresh()
         })
         .catch(() => {})
+    },
+    handleRestore(row) {
+      this.$confirm('恢复这条已删除的支出记录？', '提示', {
+        confirmButtonText: '恢复',
+        cancelButtonText: '取消',
+        type: 'info'
+      })
+        .then(() => restoreCost({ id: row.id }))
+        .then(() => {
+          this.$message.success('已恢复')
+          this.refresh()
+        })
+        .catch(() => {})
+    },
+    rowClassName({ row }) {
+      return row.record_status === 'deleted' ? 'row-deleted' : ''
     },
     submitForm() {
       this.$refs.costForm.validate(valid => {
@@ -454,6 +494,10 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+.cost-panel ::v-deep .row-deleted {
+  color: #a8abb2;
+  background: #fafafa;
+}
 .cost-panel {
   .stat-row {
     margin-bottom: 12px;
