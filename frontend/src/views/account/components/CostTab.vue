@@ -88,9 +88,10 @@
       style="width: 100%"
     >
       <el-table-column prop="biz_date" label="发生日期" width="120" align="center" />
-      <el-table-column label="类别" width="100" align="center">
+      <el-table-column label="类别" width="112" align="center">
         <template slot-scope="{ row }">
           <el-tag size="mini" :type="categoryType(row.category)">{{ row.category || '未分类' }}</el-tag>
+          <span v-if="row.kind === 'refund'" class="auto-tag" title="订单退款自动生成">自动</span>
         </template>
       </el-table-column>
       <el-table-column prop="payee" label="收款方" min-width="140" />
@@ -121,12 +122,16 @@
             type="success"
             size="mini"
             @click="handleRestore(row)"
-          >
-            恢复
-          </el-button>
+          >恢复</el-button>
           <template v-else>
-            <el-button type="primary" size="mini" @click="handleUpdate(row)">编辑</el-button>
-            <el-button type="danger" size="mini" @click="handleDelete(row)">删除</el-button>
+            <el-button type="primary" size="mini" :disabled="row.kind === 'refund'" @click="handleUpdate(row)">编辑</el-button>
+            <el-button
+              type="danger"
+              size="mini"
+              :disabled="row.kind === 'refund'"
+              :title="row.kind === 'refund' ? '退款记录由订单退款自动生成，请到订单进度里处理' : ''"
+              @click="handleDelete(row)"
+            >删除</el-button>
           </template>
         </template>
       </el-table-column>
@@ -478,6 +483,7 @@ export default {
     },
     categoryType(category) {
       const map = {
+        退款: 'danger',
         采购: 'warning',
         物流: '',
         人工: 'success',
@@ -545,6 +551,17 @@ export default {
   .amount-text {
     color: #e6a23c;
     font-weight: 600;
+  }
+
+  .auto-tag {
+    margin-left: 3px;
+    font-size: 10px;
+    color: #f56c6c;
+    border: 1px solid #fbc4c4;
+    border-radius: 8px;
+    padding: 0 4px;
+    line-height: 14px;
+    display: inline-block;
   }
 
   .muted {

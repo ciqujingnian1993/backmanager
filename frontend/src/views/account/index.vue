@@ -4,25 +4,29 @@
       <el-col :xs="12" :sm="8" :lg="6">
         <div class="summary-card">
           <div class="summary-label">总收入{{ monthSuffix }}</div>
-          <div class="summary-value revenue">￥{{ money(summary.revenue) }}</div>
+          <div class="summary-value revenue">￥{{ money(summary.done_revenue) }}</div>
+          <div class="summary-tip">已完成 {{ summary.done_count }} 单 · 在途 ￥{{ money(inflightRevenue) }} 未计入</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="8" :lg="6">
         <div class="summary-card">
           <div class="summary-label">订单成本{{ monthSuffix }}</div>
-          <div class="summary-value cost">￥{{ money(summary.cost) }}</div>
+          <div class="summary-value cost">￥{{ money(summary.done_cost) }}</div>
+          <div class="summary-tip">已完成订单的成本口径</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="8" :lg="6">
         <div class="summary-card">
           <div class="summary-label">订单毛利{{ monthSuffix }}</div>
-          <div class="summary-value profit">￥{{ money(summary.profit) }}</div>
+          <div class="summary-value profit">￥{{ money(summary.done_profit) }}</div>
+          <div class="summary-tip">已完成收入 − 已完成成本</div>
         </div>
       </el-col>
       <el-col :xs="12" :sm="8" :lg="6">
         <div class="summary-card">
           <div class="summary-label">待定笔数{{ monthSuffix }}</div>
           <div class="summary-value pending">{{ summary.pending }}</div>
+          <div class="summary-tip">未填金额的订单</div>
         </div>
       </el-col>
     </el-row>
@@ -60,9 +64,7 @@
         clearable
         @change="handleFilter"
       >
-        <el-option label="待定" value="pending" />
-        <el-option label="进行中" value="doing" />
-        <el-option label="已完成" value="done" />
+        <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
       <el-select
         v-model="listQuery.biz_status"
@@ -165,11 +167,18 @@
         <el-table-column label="完成时间" width="138" align="center">
           <template slot-scope="{ row }">{{ completedText(row.completed_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="128" align="center" fixed="right">
+        <el-table-column label="操作" width="180" align="center" fixed="right">
           <template slot-scope="{ row }">
             <el-button type="text" size="mini" @click="handleDetail(row)">详情</el-button>
             <el-button type="text" size="mini" @click="handleUpdate(row)">编辑</el-button>
-            <el-button type="text" size="mini" class="danger-text" @click="handleDelete(row)">删除</el-button>
+            <el-button
+              type="text"
+              size="mini"
+              class="warning-text"
+              :disabled="!canCancel(row)"
+              :title="cancelTip(row)"
+              @click="openCancel(row)"
+            >取消订单</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -262,6 +271,12 @@
             placeholder="订单层面的补充说明，可不填"
           />
         </el-form-item>
+        <el-form-item label="身份证照片">
+          <div class="photo-field">
+            <PhotoUploader v-model="form.id_photos" />
+            <span class="photo-tip">客户身份证正反面，可传多张，编辑订单时可补传</span>
+          </div>
+        </el-form-item>
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="平台订单编号">
@@ -301,15 +316,23 @@
             <span v-if="detail.license_name" class="detail-card-sub">{{ detail.license_name }}</span>
             <span v-if="detail.__collapsed" class="detail-card-sum">
               <span v-if="detail.items" class="sum-item">{{ detail.items }}</span>
+              <span v-if="detail.__tasks && detail.__tasks.length" class="sum-item">
+                子任务 {{ subtaskStat(detail).done }}/{{ subtaskStat(detail).total }}
+              </span>
               <span v-if="detail.revenue" class="sum-item">收入 ¥{{ formatMoney(detail.revenue) }}</span>
               <span v-if="!detail.items && !detail.revenue" class="sum-empty">未填写业务项</span>
             </span>
             <div class="detail-card-tools">
+              <span class="tool-label">执照照片</span>
+              <PhotoUploader v-model="detail.license_photos" size="mini" />
               <span class="tool-label">任务状态</span>
-              <el-select v-model="detail.status" size="mini" class="status-select">
-                <el-option label="待定" value="pending" />
-                <el-option label="进行中" value="doing" />
-                <el-option label="已完成" value="done" />
+              <el-select
+                v-model="detail.status"
+                size="mini"
+                class="status-select"
+                @change="value => onDetailStatusChange(detail, value)"
+              >
+                <el-option v-for="item in itemStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
               </el-select>
               <el-button
                 type="text"
@@ -432,6 +455,105 @@
                 </el-form-item>
               </el-col>
             </el-row>
+            <!-- 子任务：每个业务项拆成一条独立子任务，各自办结；这里直接看/改状态，不用跳进度页 -->
+            <el-form-item label="子任务">
+              <div class="subtask-box">
+                <div class="subtask-head">
+                  <span class="subtask-tip">按业务项自动拆成独立子任务，可逐项定价、逐项办结</span>
+                  <span v-if="detail.__tasks && detail.__tasks.length" class="subtask-count">
+                    合计 ¥{{ formatMoney(subtaskSum(detail)) }} · 已办结 {{ subtaskStat(detail).done }}/{{ subtaskStat(detail).total }}
+                    <span v-if="subtaskStat(detail).cancelled"> · 已取消 {{ subtaskStat(detail).cancelled }}</span>
+                  </span>
+                </div>
+                <div v-if="!(detail.__tasks && detail.__tasks.length)" class="subtask-empty">
+                  还没选业务项；选好业务项后会自动拆出子任务
+                </div>
+                <div v-else class="subtask-list">
+                  <div
+                    v-for="task in detail.__tasks"
+                    :key="task.id || ('new-' + task.name)"
+                    class="subtask-row"
+                    :class="{
+                      'is-done': task.status === 'done',
+                      'is-cancelled': task.status === 'cancelled',
+                      'is-draft': !task.id
+                    }"
+                  >
+                    <span class="st-line" :class="'is-' + (task.line || 'other')">{{ taskLineLabel(task.line) }}</span>
+                    <span class="st-name" :title="task.name">{{ task.name }}</span>
+                    <el-tag v-if="task.source === 'manual'" size="mini" type="info" effect="plain">手工</el-tag>
+                    <span class="st-flex" />
+                    <!-- 每条子任务可以单独指定跟进人；留空表示跟随主任务 / 按跟进记录推断 -->
+                    <el-select
+                      :value="task.owner || ''"
+                      size="mini"
+                      class="st-owner"
+                      clearable
+                      filterable
+                      placeholder="跟进人"
+                      :disabled="!canEditTask(task)"
+                      :title="taskLockTip(task) || taskOwnerTip(task)"
+                      @change="value => changeTaskOwner(task, value)"
+                    >
+                      <el-option
+                        v-for="opt in ownerOptions"
+                        :key="opt.username"
+                        :label="opt.name"
+                        :value="opt.username"
+                      >
+                        <span class="st-owner-opt">
+                          <span class="owner-dot" :style="{ background: avatarColor(opt.name) }">{{ initial(opt.name) }}</span>
+                          <span>{{ opt.name }}</span>
+                        </span>
+                      </el-option>
+                    </el-select>
+                    <div class="st-amount">
+                      <span class="st-currency">¥</span>
+                      <el-input-number
+                        :value="task.amount"
+                        :controls="false"
+                        :min="0"
+                        :precision="2"
+                        size="mini"
+                        class="st-amount-input"
+                        @change="value => changeTaskAmount(detail, task, value)"
+                      />
+                    </div>
+                    <el-select
+                      :value="task.status"
+                      size="mini"
+                      class="st-status"
+                      :disabled="!canEditTask(task)"
+                      :title="taskLockTip(task)"
+                      @change="value => changeTaskStatus(detail, task, value)"
+                    >
+                      <el-option
+                        v-for="opt in taskStatusOptions"
+                        :key="opt.value"
+                        :label="opt.label"
+                        :value="opt.value"
+                      />
+                    </el-select>
+                    <i
+                      v-if="task.id && task.source === 'manual'"
+                      class="el-icon-close st-del"
+                      title="删除这条手工子任务"
+                      @click="removeTask(detail, task)"
+                    />
+                  </div>
+                </div>
+                <div v-if="!detail.id" class="subtask-foot-tip">子任务随订单一并保存；单价合计自动填到下面「单价」，× 数量得收入</div>
+                <div v-if="detail.id" class="subtask-add">
+                  <el-input
+                    v-model="detail.__taskName"
+                    size="mini"
+                    placeholder="补一条业务项里没有的子任务，如：银行开户"
+                    @keyup.enter.native="addTask(detail)"
+                  />
+                  <el-button size="mini" type="text" icon="el-icon-plus" @click="addTask(detail)">添加</el-button>
+                </div>
+              </div>
+            </el-form-item>
             <div class="money-row">
               <span class="money-row-label">费用</span>
               <div class="money-panel">
@@ -456,6 +578,7 @@
                       :controls="false"
                       :min="1"
                       :precision="0"
+                      @change="applyTaskAmounts(detail)"
                     />
                   </div>
                 </div>
@@ -512,6 +635,104 @@
       </div>
     </el-dialog>
 
+    <!-- 取消订单：退款也在这一步做（取消时把已收的钱退给客户），不再单开一个「退款」入口 -->
+    <el-dialog title="取消订单" :visible.sync="cancelVisible" width="580px" append-to-body>
+      <div v-if="cancelRow" class="op-head">
+        <span class="op-no">{{ cancelRow.order_no || '—' }}</span>
+        <el-tag size="mini" effect="plain">{{ cancelRow.client || '未填客户' }}</el-tag>
+        <span class="op-meta">订单金额 <b>¥{{ amount(cancelRow.revenue) }}</b></span>
+      </div>
+
+      <div class="op-block">
+        <div class="op-block-head">
+          <span>取消范围</span>
+          <el-button type="text" size="mini" @click="selectAllCancelItems">全选</el-button>
+        </div>
+        <div v-if="!cancellableItems.length" class="op-empty">这单没有可取消的任务（都已取消或已退款）</div>
+        <el-checkbox-group v-model="cancelForm.item_ids" class="op-items">
+          <el-checkbox v-for="item in cancellableItems" :key="item.id" :label="item.id" class="op-item">
+            <span class="oi-license">{{ item.license_name || '未填执照' }}</span>
+            <span class="oi-items">{{ item.items || '—' }}</span>
+            <span class="oi-money">¥{{ amount(item.revenue) }}</span>
+          </el-checkbox>
+        </el-checkbox-group>
+      </div>
+
+      <el-form :model="cancelForm" label-width="92px" class="op-form">
+        <el-form-item label="退款给客户">
+          <el-checkbox v-model="cancelForm.refund">同时把已收的钱退给客户</el-checkbox>
+          <div v-if="cancelForm.refund" class="refund-box">
+            <div class="refund-line">
+              <span class="rl-label">退款金额</span>
+              <el-input-number
+                v-model="cancelForm.refundAmount"
+                :min="0"
+                :max="cancelRefundMax"
+                :precision="2"
+                :step="100"
+                controls-position="right"
+                style="width: 168px"
+              />
+              <el-button
+                type="text"
+                size="mini"
+                :disabled="!cancelRefundMax"
+                @click="cancelForm.refundAmount = cancelRefundMax"
+              >按所选金额全退（¥{{ amount(cancelRefundMax) }}）</el-button>
+            </div>
+            <div class="refund-line">
+              <span class="rl-label">退款方式</span>
+              <el-select v-model="cancelForm.refundMethod" clearable placeholder="可不选" style="width: 168px">
+                <el-option label="微信" value="微信" />
+                <el-option label="支付宝" value="支付宝" />
+                <el-option label="银行转账" value="银行转账" />
+                <el-option label="现金" value="现金" />
+              </el-select>
+            </div>
+            <div class="refund-hint">
+              退款会记一笔「成本管理」的现金流出，订单收入同步冲减；财务报表不会重复扣这笔支出。
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item label="取消原因" required>
+          <el-select
+            v-model="cancelForm.reason"
+            style="width: 100%"
+            filterable
+            allow-create
+            default-first-option
+            placeholder="选择原因，也可以直接输入"
+          >
+            <el-option v-for="item in cancelReasons" :key="item" :label="item" :value="item" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="cancelForm.note"
+            type="textarea"
+            :rows="3"
+            maxlength="200"
+            show-word-limit
+            placeholder="补充说明，例如：客户 11/09 电话告知不办了，已收定金 300 待退"
+          />
+        </el-form-item>
+        <el-form-item label="金额处理">
+          <el-checkbox v-model="cancelForm.clearAmount">把任务金额清零（不计收入，成本保留）</el-checkbox>
+        </el-form-item>
+      </el-form>
+
+      <div class="op-tip">
+        <i class="el-icon-warning-outline" />
+        取消后任务状态变为「取消订单」，并在跟进时间线留一条记录；勾了退款会再记一条「退款」跟进。
+        取消原因和备注在跟进详情里能看到。
+      </div>
+
+      <div slot="footer">
+        <el-button @click="cancelVisible = false">取消</el-button>
+        <el-button type="danger" :loading="cancelSaving" @click="submitCancel">确认取消订单</el-button>
+      </div>
+    </el-dialog>
+
     <order-detail-dialog :visible.sync="detailVisible" :row="detailRow" />
   </div>
 </template>
@@ -520,24 +741,33 @@
 import Pagination from '@/components/Pagination'
 import OrderDetailDialog from './components/OrderDetailDialog'
 import OrderItemsTable from './components/OrderItemsTable'
+import PhotoUploader from './components/PhotoUploader'
 import {
   fetchAccountList,
   fetchAccountSummary,
   createAccount,
   updateAccount,
-  deleteAccount
+  cancelAccount
 } from '@/api/account'
 import { fetchPlatformList } from '@/api/platform'
 import { fetchBizItemList } from '@/api/bizitem'
+import {
+  fetchItemTasks,
+  fetchProgressOwners,
+  addProgressTask,
+  deleteProgressTask
+} from '@/api/progress'
 import { BIZ_STATUS_OPTIONS, TAX_STATUS_OPTIONS, splitBizStatus, joinBizStatus, bizStatusText } from '@/constants/license'
 import { splitItems, joinItems, formatMoney } from '@/constants/bizitem'
+import {
+  ORDER_STATUS_OPTIONS,
+  ITEM_STATUS_OPTIONS,
+  orderStatusText,
+  orderStatusType,
+  CANCEL_BLOCKED_STATUSES,
+  CANCEL_REASON_OPTIONS
+} from '@/constants/order'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
-
-const STATUS_MAP = {
-  pending: '待定',
-  doing: '进行中',
-  done: '已完成'
-}
 
 // 统一社会信用代码：18 位，数字与大写字母（不含 I O Z S V）
 const CREDIT_CODE_RE = /^[0-9A-HJ-NPQRTUWXY]{18}$/
@@ -558,7 +788,7 @@ function optionalPattern(pattern, message) {
 
 export default {
   name: 'OrderList',
-  components: { Pagination, OrderDetailDialog, OrderItemsTable },
+  components: { Pagination, OrderDetailDialog, OrderItemsTable, PhotoUploader },
   mixins: [refreshOnActivate],
   data() {
     const now = new Date()
@@ -574,13 +804,30 @@ export default {
         revenue: 0,
         cost: 0,
         profit: 0,
-        pending: 0
+        pending: 0,
+        // 已完成订单口径（执照主任务全部办结才计入）
+        done_count: 0,
+        done_revenue: 0,
+        done_cost: 0,
+        done_profit: 0
       },
       categoryOptions: ['同行', '代理记账', '工商注册', '变更注销'],
       platformOptions: [],
       bizItemOptions: [],
       bizStatusOptions: BIZ_STATUS_OPTIONS,
       taxStatusOptions: TAX_STATUS_OPTIONS,
+      statusOptions: ORDER_STATUS_OPTIONS,
+      // 主任务（执照）只能在进行中 / 已完成 / 取消之间选，状态由子任务决定
+      itemStatusOptions: ITEM_STATUS_OPTIONS,
+      // 子任务状态（与后端 TASK_STATUS_LABELS 一致）
+      taskStatusOptions: [
+        { value: 'pending', label: '未开始' },
+        { value: 'doing', label: '办理中' },
+        { value: 'done', label: '已办结' },
+        { value: 'cancelled', label: '已取消' }
+      ],
+      // 子任务可选的跟进人（系统用户 + 历史跟进人）
+      ownerOptions: [],
       listQuery: {
         page: 1,
         limit: 20,
@@ -595,6 +842,20 @@ export default {
       dialogType: 'create',
       detailVisible: false,
       detailRow: null,
+      // 订单级取消（取消时可一并退款）：整单或按执照任务多选
+      cancelVisible: false,
+      cancelSaving: false,
+      cancelRow: null,
+      cancelReasons: CANCEL_REASON_OPTIONS,
+      cancelForm: {
+        item_ids: [],
+        reason: '',
+        note: '',
+        clearAmount: true,
+        refund: true,
+        refundAmount: 0,
+        refundMethod: ''
+      },
       form: this.emptyForm(),
       rules: {
         biz_date: [{ required: true, message: '请选择业务日期', trigger: 'change' }],
@@ -621,6 +882,16 @@ export default {
     monthSuffix() {
       return this.listQuery.month ? `（${this.listQuery.month}）` : '（全部）'
     },
+    // 还没完成的订单金额：这部分不进总收入，卡片上提示一下
+    inflightRevenue() {
+      return Math.max(0, Number(this.summary.revenue || 0) - Number(this.summary.done_revenue || 0))
+    },
+    myUsername() {
+      return this.$store.getters.username || ''
+    },
+    isAdmin() {
+      return (this.$store.getters.roles || []).indexOf('admin') >= 0
+    },
     // 编辑时把订单编号带到标题上，方便核对；新增时编号由后端在保存后生成
     dialogTitle() {
       if (this.dialogType !== 'edit') return '新增订单'
@@ -631,18 +902,62 @@ export default {
         this.listQuery.month || this.listQuery.keyword || this.listQuery.status ||
         this.listQuery.platform || this.listQuery.biz_status || this.listQuery.tax_status
       )
+    },
+    // 这笔订单里还能取消的执照任务（已取消 / 已退款 的排除）
+    cancellableItems() {
+      const details = (this.cancelRow && this.cancelRow.details) || []
+      return details.filter(item => CANCEL_BLOCKED_STATUSES.indexOf(item.status) < 0)
+    },
+    // 选中要取消的任务里，还能退给客户的金额上限（已收金额合计）
+    cancelRefundMax() {
+      const picked = this.cancelForm.item_ids || []
+      const total = this.cancellableItems
+        .filter(item => picked.indexOf(item.id) >= 0)
+        .reduce((sum, item) => sum + Math.max(0, Number(item.revenue || 0)), 0)
+      return Math.round(total * 100) / 100
+    }
+  },
+  watch: {
+    // 换取消范围时，退款金额默认跟着变成这些任务的已收合计
+    'cancelForm.item_ids'() {
+      this.cancelForm.refundAmount = this.cancelRefundMax
+    },
+    // 首页卡片再次穿透到本页时（如总收入→只看已完成），同步筛选条件
+    '$route.query': {
+      handler() {
+        if (this.applyRouteQuery()) {
+          this.getList()
+          this.getSummary()
+        }
+      }
     }
   },
   created() {
-    const keyword = this.$route.query.keyword
-    if (keyword) this.listQuery.keyword = keyword
+    this.applyRouteQuery()
     this.getList()
     this.getSummary()
     this.loadPlatforms()
     this.loadBizItems()
+    this.loadOwners()
   },
   methods: {
     formatMoney,
+    // 读取首页卡片带过来的筛选条件（只认本页支持的项）
+    applyRouteQuery() {
+      const q = this.$route.query || {}
+      const sign = JSON.stringify(q)
+      if (sign === this.__querySign) return false
+      this.__querySign = sign
+      this.listQuery.keyword = q.keyword || ''
+      this.listQuery.status = q.status || ''
+      this.listQuery.platform = q.platform || ''
+      this.listQuery.biz_status = q.biz_status || ''
+      this.listQuery.tax_status = q.tax_status || ''
+      if (q.month === 'all') this.listQuery.month = ''
+      else if (q.month) this.listQuery.month = q.month
+      this.listQuery.page = 1
+      return true
+    },
     joinItems,
     splitBizStatus,
     bizStatusText,
@@ -690,17 +1005,32 @@ export default {
         return total + Number((found && found.unit_price) || 0)
       }, 0)
     },
-    // 选择业务项：拼成文本，并在「单价还没被手改」时按默认单价合计联动收入
+    // 业务项单价（业务项配置里维护的默认价）
+    priceOf(name) {
+      const found = this.bizItemOptions.find(item => item.name === name)
+      return Number((found && found.unit_price) || 0)
+    },
+    // 选择业务项：拼成文本，子任务跟着重拆，再把各行单价合计回填到单价/收入
     handleItemsChange(detail, list) {
       const selected = list || []
       detail.item_list = selected
       detail.items = joinItems(selected)
-      const sum = this.itemsAutoSum(selected)
+      // 业务项一变，卡片里的子任务跟着重新拆（新项带上默认单价）
+      this.syncDetailTasks(detail)
+      this.applyTaskAmounts(detail)
+    },
+    // 子任务各行单价合计
+    subtaskSum(detail) {
+      return ((detail && detail.__tasks) || []).reduce((total, task) => total + Number(task.amount || 0), 0)
+    },
+    // 合计写回「单价 / 收入」：只在单价没被手改过的时候覆盖，避免冲掉人工报价
+    applyTaskAmounts(detail) {
+      const sum = Number(this.subtaskSum(detail).toFixed(2))
+      const quantity = Number(detail.quantity || 1)
       const previous = Number(detail.__autoPrice || 0)
       const current = detail.unit_price === undefined || detail.unit_price === null || detail.unit_price === ''
         ? null
         : Number(detail.unit_price)
-      const quantity = Number(detail.quantity || 1)
       const revenue = detail.revenue === undefined || detail.revenue === null || detail.revenue === ''
         ? null
         : Number(detail.revenue)
@@ -711,6 +1041,185 @@ export default {
         }
       }
       detail.__autoPrice = sum
+    },
+    // 改某一项的单价：改完立刻重算合计、单价、收入
+    changeTaskAmount(detail, task, value) {
+      const amount = value === '' || value === null || value === undefined ? 0 : Number(value)
+      this.$set(task, 'amount', amount)
+      this.applyTaskAmounts(detail)
+    },
+    // ---- 执照下的子任务：每个业务项一条独立子任务 ----
+    initial(name) {
+      const text = String(name || '').trim()
+      return text ? text.slice(0, 1) : '?'
+    },
+    avatarColor(name) {
+      const text = String(name || '')
+      if (!text) return '#c0c4cc'
+      const colors = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#8e6cf0', '#13c2c2', '#d46b08', '#597ef7']
+      return colors[text.charCodeAt(0) % colors.length]
+    },
+    ownerName(username) {
+      const found = this.ownerOptions.find(item => item.username === username)
+      return found ? found.name : username || ''
+    },
+    taskOwnerTip(task) {
+      if (!task || !task.owner) return '未指定跟进人；谁先编辑就会自动认领'
+      return '跟进人：' + this.ownerName(task.owner) + '，可点开改'
+    },
+    // 子任务只有跟进人本人和管理员能改；还没指定跟进人时谁都能改（保存后会自动记成跟进人）
+    canEditTask(task) {
+      if (!task) return false
+      if (this.isAdmin) return true
+      const owner = (task.owner || '').trim()
+      return !owner || owner === this.myUsername
+    },
+    taskLockTip(task) {
+      if (this.canEditTask(task)) return ''
+      return '这条子任务的跟进人是 ' + (this.ownerName(task.owner) || '—') + '，只有本人或管理员能改'
+    },
+    async loadOwners() {
+      if (this.ownerOptions.length) return
+      try {
+        const { data } = await fetchProgressOwners()
+        this.ownerOptions = (data && data.items) || []
+      } catch (error) {
+        this.ownerOptions = []
+      }
+    },
+    // 办理线判定与后端 TASK_LINE_RULES 保持一致（先税务后工商，「税务注销」不会被「注销」抢走）
+    taskLine(name) {
+      const text = String(name || '')
+      if (/(税务|解非|非正常|清税|记账|报税|申报|发票|票种|汇算|欠税|有税|无税|个税|社保)/.test(text)) return 'tax'
+      if (/(工商|执照|注销|注册|变更|地址|年报|刻章|银行|股权|增资|减资|经营范围|另册|吊销|挂靠|虚假)/.test(text)) return 'biz'
+      return 'other'
+    },
+    taskLineLabel(line) {
+      return { biz: '工商', tax: '税务' }[line] || '其他'
+    },
+    // 按当前业务项重排子任务：每个业务项一条，已存在的保留状态和单价，手工补的排在最后
+    syncDetailTasks(detail) {
+      const names = detail.item_list || []
+      const existing = (detail.__tasks || []).slice()
+      // 刚被去掉的业务项先放进暂存区：手滑删了又加回来，状态和单价都还在
+      const stash = (detail.__taskStash || []).slice()
+      const next = names.map(name => {
+        let index = existing.findIndex(task => task.name === name && task.source !== 'manual')
+        if (index >= 0) return existing.splice(index, 1)[0]
+        index = stash.findIndex(task => task.name === name)
+        if (index >= 0) return stash.splice(index, 1)[0]
+        return {
+          id: null,
+          name,
+          line: this.taskLine(name),
+          status: 'pending',
+          amount: this.priceOf(name),
+          owner: '',
+          source: 'item'
+        }
+      })
+      existing.forEach(task => {
+        if (task.source === 'manual') next.push(task)
+        else stash.push(task)
+      })
+      detail.__tasks = next
+      detail.__taskStash = stash
+    },
+    subtaskStat(detail) {
+      const tasks = (detail && detail.__tasks) || []
+      return {
+        total: tasks.length,
+        done: tasks.filter(task => task.status === 'done').length,
+        cancelled: tasks.filter(task => task.status === 'cancelled').length
+      }
+    },
+    // 打开编辑弹窗时按订单把各执照的细分任务一次拉回来（不做 N+1）
+    async loadDetailTasks(details) {
+      const list = (details || []).filter(detail => detail.id)
+      if (!list.length) return
+      try {
+        const { data } = await fetchItemTasks({ account_id: this.form.id })
+        const grouped = (data && data.tasks) || {}
+        list.forEach(detail => {
+          const tasks = grouped[String(detail.id)] || []
+          detail.__tasks = tasks.map(task => Object.assign({}, task))
+          // 业务项可能改过还没保存，按当前选择补齐
+          this.syncDetailTasks(detail)
+          // 以实际行单价为基准，后面改单价/加减业务项时再按差额联动
+          detail.__autoPrice = this.subtaskSum(detail)
+        })
+      } catch (error) {
+        list.forEach(detail => {
+          this.syncDetailTasks(detail)
+          detail.__autoPrice = this.subtaskSum(detail)
+        })
+      }
+    },
+    // 子任务跟进人同样先在本地改，点「确定」随订单一起保存
+    changeTaskOwner(task, owner) {
+      this.$set(task, 'owner', owner || '')
+    },
+    // 子任务状态先在本地改，点「确定」一起保存（新建订单时也能直接指定各条状态）
+    changeTaskStatus(detail, task, status) {
+      if (!status || task.status === status) return
+      this.$set(task, 'status', status)
+      this.syncDetailStatusByTasks(detail)
+    },
+    // 执照（主任务）状态变化时带着子任务走，跟后端的规则保持一致：
+    // 已完成 → 全部办结；取消 → 未办结的一起取消；恢复 → 取消的回到未开始
+    onDetailStatusChange(detail, value) {
+      const tasks = detail.__tasks || []
+      tasks.forEach(task => {
+        if (value === 'done') this.$set(task, 'status', 'done')
+        else if (value === 'cancelled' && task.status !== 'done') this.$set(task, 'status', 'cancelled')
+        else if (value !== 'cancelled' && task.status === 'cancelled') this.$set(task, 'status', 'pending')
+      })
+    },
+    // 反过来：子任务全办结 → 主任务已完成；主任务已完成又被重新打开 → 退回进行中
+    // 反过来：主任务状态只由子任务决定 —— 全办结 = 已完成，否则一律进行中
+    // （取消 / 已退款的执照不参与，避免把关单的任务又拉回进行中）
+    syncDetailStatusByTasks(detail) {
+      const tasks = detail.__tasks || []
+      if (!tasks.length) return
+      if (detail.status === 'cancelled' || detail.status === 'refunded') return
+      const done = tasks.filter(task => task.status === 'done').length
+      this.$set(detail, 'status', done === tasks.length ? 'done' : 'doing')
+    },
+    async addTask(detail) {
+      const name = String(detail.__taskName || '').trim()
+      if (!name) {
+        this.$message.warning('先填子任务名称')
+        return
+      }
+      if (!detail.id) {
+        this.$message.warning('这条执照还没保存，先在业务项里加')
+        return
+      }
+      try {
+        const { data } = await addProgressTask({ item_id: detail.id, name })
+        if (data && data.task) detail.__tasks.push(Object.assign({}, data.task))
+        if (data && data.summary && data.summary.status) this.$set(detail, 'status', data.summary.status)
+        this.$set(detail, '__taskName', '')
+        this.$message.success('子任务已添加')
+      } catch (error) {
+        this.$message.error((error && error.message) || '添加失败')
+      }
+    },
+    async removeTask(detail, task) {
+      if (!task.id) return
+      try {
+        await this.$confirm(`删除子任务「${task.name}」？`, '删除子任务', { type: 'warning' })
+      } catch (error) {
+        return
+      }
+      try {
+        const { data } = await deleteProgressTask(task.id)
+        detail.__tasks = detail.__tasks.filter(item => item.id !== task.id)
+        if (data && data.summary && data.summary.status) detail.status = data.summary.status
+        this.$message.success('已删除')
+      } catch (error) {
+        this.$message.error((error && error.message) || '删除失败')
+      }
     },
     emptyDetail() {
       return {
@@ -726,12 +1235,19 @@ export default {
         item_list: [],
         __autoPrice: 0,
         __collapsed: false,
+        // 按业务项拆出来的子任务（列表里直接看/改状态）
+        __tasks: [],
+        __taskStash: [],
+        __taskName: '',
+        // 执照照片 [{url, name, size}]
+        license_photos: [],
         unit_price: undefined,
         quantity: 1,
         revenue: undefined,
         cost: undefined,
         profit: undefined,
-        status: 'pending',
+        // 主任务默认「进行中」；子任务全办结时自动变已完成
+        status: 'doing',
         remark: ''
       }
     },
@@ -749,6 +1265,8 @@ export default {
         phone: '',
         platform: '',
         remark: '',
+        // 客户身份证照片 [{url, name, size}]
+        id_photos: [],
         details: [this.emptyDetail()]
       }
     },
@@ -827,6 +1345,7 @@ export default {
         legal_person: item.legal_person,
         legal_id: item.legal_id,
         legal_phone: item.legal_phone || '',
+        license_photos: Array.isArray(item.license_photos) ? item.license_photos : [],
         biz_status: item.biz_status,
         tax_status: item.tax_status,
         items: item.items,
@@ -850,9 +1369,13 @@ export default {
         phone: row.phone,
         platform: row.platform,
         remark: row.remark,
+        id_photos: Array.isArray(row.id_photos) ? row.id_photos : [],
         details: details.length ? details : [this.emptyDetail()]
       }
+      // 先按业务项铺一版，随后用服务端真实状态覆盖
+      details.forEach(detail => this.syncDetailTasks(detail))
       this.dialogVisible = true
+      this.loadDetailTasks(details)
       this.$nextTick(() => {
         this.$refs.accountForm && this.$refs.accountForm.clearValidate()
       })
@@ -861,24 +1384,87 @@ export default {
       this.detailRow = row
       this.detailVisible = true
     },
-    handleDelete(row) {
-      const suffix = row.license_count > 1 ? `（含 ${row.license_count} 个执照任务，进度一并停止显示）` : ''
-      this.$confirm(
-        `确认删除这条订单吗？${suffix}删除后只是标记为「已删除」，订单、执照与进度都会保留在数据库里。`,
-        '提示',
-        {
-          confirmButtonText: '确定',
-          cancelButtonText: '取消',
-          type: 'warning'
-        }
-      )
-        .then(() => deleteAccount(row.id))
-        .then(() => {
-          this.$message({ message: '删除成功', type: 'success' })
-          this.getList()
-          this.getSummary()
+    // ---- 取消订单 ----
+    canCancel(row) {
+      if (!row || !row.details) return false
+      return row.details.some(item => CANCEL_BLOCKED_STATUSES.indexOf(item.status) < 0)
+    },
+    cancelTip(row) {
+      if (this.canCancel(row)) return '取消订单，可同时把已收的钱退给客户'
+      if (row && row.status === 'refunded') return '这单已全额退款，不能再取消'
+      return '这单已取消'
+    },
+    openCancel(row) {
+      if (!this.canCancel(row)) {
+        this.$message.warning(this.cancelTip(row))
+        return
+      }
+      this.cancelRow = row
+      const items = (row.details || []).filter(item => CANCEL_BLOCKED_STATUSES.indexOf(item.status) < 0)
+      const received = items.reduce((sum, item) => sum + Math.max(0, Number(item.revenue || 0)), 0)
+      this.cancelForm = {
+        item_ids: items.map(item => item.id),
+        reason: '',
+        note: '',
+        clearAmount: true,
+        // 取消一般都要退钱，默认勾上并把金额填成已收合计，不想退就取消勾选
+        refund: received > 0,
+        refundAmount: Math.round(received * 100) / 100,
+        refundMethod: ''
+      }
+      this.cancelVisible = true
+    },
+    selectAllCancelItems() {
+      this.cancelForm.item_ids = this.cancellableItems.map(item => item.id)
+    },
+    async submitCancel() {
+      const row = this.cancelRow
+      if (!row) return
+      const picked = this.cancelForm.item_ids || []
+      if (!picked.length) {
+        this.$message.warning('请先勾选要取消的执照任务')
+        return
+      }
+      if (!(this.cancelForm.reason || '').trim()) {
+        this.$message.warning('请填写取消原因')
+        return
+      }
+      const refundAmount = this.cancelForm.refund ? Number(this.cancelForm.refundAmount || 0) : 0
+      // 退款金额允许填 0：订单没收钱也要取消时，勾了退款只是走个记录
+      if (this.cancelForm.refund && refundAmount < 0) {
+        this.$message.warning('退款金额不能为负数')
+        return
+      }
+      if (refundAmount > this.cancelRefundMax + 0.001) {
+        this.$message.warning(`退款金额不能超过所选任务的已收金额 ¥${this.amount(this.cancelRefundMax)}`)
+        return
+      }
+      this.cancelSaving = true
+      try {
+        const { data } = await cancelAccount({
+          account_id: row.id,
+          item_ids: picked,
+          reason: this.cancelForm.reason,
+          note: this.cancelForm.note,
+          clear_amount: this.cancelForm.clearAmount,
+          refund_amount: refundAmount,
+          refund_method: this.cancelForm.refundMethod
         })
-        .catch(() => {})
+        this.cancelVisible = false
+        const count = data ? data.cancelled_count : picked.length
+        const cleared = data ? data.cleared_count : 0
+        const refunded = data ? Number(data.refund || 0) : 0
+        let message = `已取消 ${count} 个任务`
+        if (refunded > 0) message += `，退款 ¥${this.amount(refunded)}`
+        if (cleared) message += `，${cleared} 个任务金额已清零`
+        this.$message.success(message)
+        this.getList()
+        this.getSummary()
+      } catch (error) {
+        // 请求层已弹出错误提示
+      } finally {
+        this.cancelSaving = false
+      }
     },
     submitForm() {
       this.$refs.accountForm.validate(valid => {
@@ -911,7 +1497,20 @@ export default {
           cost: this.numberOrNull(detail.cost),
           profit: this.numberOrNull(detail.profit),
           status: detail.status || 'pending',
-          remark: (detail.remark || '').trim()
+          remark: (detail.remark || '').trim(),
+          // 执照照片：随明细一起保存（[{url, name, size}]）
+          license_photos: Array.isArray(detail.license_photos) ? detail.license_photos : [],
+          // 子任务逐条的状态、单价与跟进人（业务项拆出来的 + 手工补的），保存时一起落库；
+          // 别人的子任务不提交，避免改单时把别人的办理状态覆盖掉
+          tasks: (detail.__tasks || [])
+            .filter(task => this.canEditTask(task))
+            .map(task => ({
+              id: task.id || null,
+              name: task.name,
+              status: task.status || 'pending',
+              amount: Number(task.amount || 0),
+              owner: task.owner || ''
+            }))
         }))
         const payload = {
           id: this.form.id,
@@ -922,6 +1521,8 @@ export default {
           platform: this.form.platform || '',
           platform_order_no: (this.form.platform_order_no || '').trim(),
           remark: this.form.remark,
+          // 客户身份证照片（订单层面）
+          id_photos: Array.isArray(this.form.id_photos) ? this.form.id_photos : [],
           details
         }
         const request = this.dialogType === 'edit'
@@ -987,7 +1588,7 @@ export default {
       return num === Math.trunc(num) ? String(Math.trunc(num)) : String(Math.round(num * 100) / 100)
     },
     statusText(status) {
-      return STATUS_MAP[status] || '待定'
+      return orderStatusText(status)
     },
     completedText(stamp) {
       if (!stamp) return '—'
@@ -996,7 +1597,7 @@ export default {
       return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
     },
     statusType(status) {
-      return status === 'done' ? 'success' : status === 'doing' ? 'warning' : 'info'
+      return orderStatusType(status)
     }
   }
 }
@@ -1029,6 +1630,12 @@ export default {
     &.cost { color: #e6a23c; }
     &.profit { color: #409eff; }
     &.pending { color: #f56c6c; }
+  }
+
+  .summary-tip {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #909399;
   }
 
   .keyword-input {
@@ -1210,6 +1817,15 @@ export default {
         color: #909399;
       }
 
+      // 执照照片小上传区：缩略图和「+」并排，不留太大空隙
+      .photo-uploader {
+        margin-right: 14px;
+      }
+
+      .tool-label + .photo-uploader {
+        margin-right: 14px;
+      }
+
       .status-select {
         width: 96px;
       }
@@ -1306,6 +1922,10 @@ export default {
     }
   }
 
+  .warning-text {
+    color: #e6a23c;
+  }
+
   .danger-text {
     color: #f56c6c;
   }
@@ -1314,11 +1934,352 @@ export default {
     color: #c0c4cc;
   }
 
+  /* 订单退款 / 取消订单弹窗 */
+  .op-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed #ebeef5;
+
+    .op-no {
+      font-family: Menlo, Consolas, monospace;
+      font-weight: 600;
+      color: #303133;
+    }
+
+    .op-meta {
+      margin-left: auto;
+      font-size: 12px;
+      color: #909399;
+
+      b {
+        color: #303133;
+      }
+    }
+  }
+
+  .op-block {
+    margin-bottom: 12px;
+
+    .op-block-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #606266;
+    }
+
+    .op-items {
+      display: block;
+      max-height: 198px;
+      overflow-y: auto;
+      padding: 4px 10px;
+      border-radius: 4px;
+      background: #fafafa;
+    }
+
+    ::v-deep .el-checkbox {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      margin: 0 0 2px;
+    }
+
+    ::v-deep .el-checkbox__label {
+      display: flex;
+      align-items: center;
+      flex: 1;
+      min-width: 0;
+      font-size: 13px;
+      color: #303133;
+    }
+
+    .oi-license {
+      flex: 0 0 auto;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .oi-items {
+      flex: 1;
+      min-width: 0;
+      margin-left: 8px;
+      font-size: 12px;
+      color: #909399;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .oi-money {
+      flex: 0 0 auto;
+      margin-left: 8px;
+      font-family: Menlo, Consolas, monospace;
+      color: #f56c6c;
+    }
+
+    .op-empty {
+      padding: 6px 0;
+      font-size: 12px;
+      color: #c0c4cc;
+    }
+  }
+
+  .op-form {
+    margin-top: 10px;
+
+    .op-quick {
+      margin-top: 2px;
+      text-align: right;
+    }
+  }
+
+  /* 取消弹窗里的退款区块：勾了才展开 */
+  .refund-box {
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: 4px;
+    background: #fafafa;
+    border: 1px dashed #e4e7ed;
+  }
+
+  .refund-line {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+
+    .rl-label {
+      flex: 0 0 auto;
+      font-size: 12px;
+      color: #909399;
+    }
+  }
+
+  .refund-hint {
+    margin-top: 2px;
+    font-size: 12px;
+    line-height: 18px;
+    color: #909399;
+  }
+
+  .op-tip {
+    margin-top: 4px;
+    padding: 8px 10px;
+    border-radius: 4px;
+    background: #fdf6ec;
+    color: #b88230;
+    font-size: 12px;
+    line-height: 18px;
+  }
+
   .items-preview {
     margin-top: 4px;
     font-size: 12px;
     color: #909399;
     line-height: 18px;
+  }
+
+  /* 子任务：业务项拆出来的独立小任务，卡片里直接看状态 */
+  .subtask-box {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ebeef5;
+    border-radius: 4px;
+    background: #fafbfc;
+  }
+
+  .subtask-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
+  .subtask-tip {
+    font-size: 12px;
+    color: #909399;
+  }
+
+  .subtask-count {
+    font-size: 12px;
+    font-weight: 600;
+    color: #606266;
+  }
+
+  .subtask-empty {
+    font-size: 12px;
+    line-height: 22px;
+    color: #c0c4cc;
+  }
+
+  .subtask-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .subtask-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 8px;
+    border: 1px solid #f0f2f5;
+    border-radius: 4px;
+    background: #fff;
+
+    &.is-done .st-name {
+      color: #67c23a;
+      text-decoration: line-through;
+    }
+
+    &.is-cancelled .st-name {
+      color: #c0c4cc;
+      text-decoration: line-through;
+    }
+
+    &.is-draft {
+      border-style: dashed;
+      background: #fdfcf7;
+    }
+  }
+
+  .st-line {
+    flex: none;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 3px;
+    font-size: 11px;
+    line-height: 18px;
+
+    &.is-biz {
+      color: #b88230;
+      background: #fdf6ec;
+    }
+
+    &.is-tax {
+      color: #337ecc;
+      background: #ecf5ff;
+    }
+
+    &.is-other {
+      color: #909399;
+      background: #f4f4f5;
+    }
+  }
+
+  .st-name {
+    overflow: hidden;
+    font-size: 13px;
+    color: #303133;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .st-flex {
+    flex: 1;
+  }
+
+  .st-amount {
+    display: flex;
+    align-items: center;
+    width: 108px;
+    padding: 0 6px;
+    border: 1px solid #dcdfe6;
+    border-radius: 4px;
+    background: #fff;
+  }
+
+  .st-currency {
+    margin-right: 2px;
+    font-size: 12px;
+    color: #c0c4cc;
+  }
+
+  .st-amount-input {
+    width: 100%;
+
+    ::v-deep .el-input__inner {
+      height: 24px;
+      padding: 0;
+      border: none;
+      font-size: 12px;
+      line-height: 24px;
+      text-align: right;
+    }
+  }
+
+  .subtask-foot-tip {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #909399;
+  }
+
+  .st-owner {
+    width: 118px;
+
+    ::v-deep .el-input__inner {
+      height: 24px;
+      padding: 0 22px 0 8px;
+      font-size: 12px;
+      line-height: 24px;
+    }
+
+    ::v-deep .el-input__icon {
+      line-height: 24px;
+    }
+  }
+
+  .st-owner-opt {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .owner-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+    color: #fff;
+    border-radius: 50%;
+  }
+
+  .st-status {
+    width: 92px;
+  }
+
+  .st-draft {
+    font-size: 12px;
+    color: #c0c4cc;
+  }
+
+  .st-del {
+    cursor: pointer;
+    color: #c0c4cc;
+
+    &:hover {
+      color: #f56c6c;
+    }
+  }
+
+  .subtask-add {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
   }
 
   .form-hint {
@@ -1331,6 +2292,18 @@ export default {
   .platform-order-no-input ::v-deep .el-input__inner {
     font-family: Menlo, Consolas, monospace;
     letter-spacing: 0.3px;
+  }
+
+  // 订单信息里的身份证照片：上传区加一句提示
+  .photo-field {
+    display: flex;
+    align-items: center;
+
+    .photo-tip {
+      margin-left: 12px;
+      font-size: 12px;
+      color: #909399;
+    }
   }
 
   /* 工商状态平铺勾选：5 项全部展开，不再折叠成「+N」；窄屏自动换行 */

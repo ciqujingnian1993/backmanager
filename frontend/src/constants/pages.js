@@ -3,6 +3,7 @@ export const PAGE_OPTIONS = [
   { path: '/account/index', label: '订单管理' },
   { path: '/account/query', label: '订单查询' },
   { path: '/progress/index', label: '订单进度' },
+  { path: '/price/index', label: '价格配置' },
   { path: '/cost/index', label: '支出管理' },
   { path: '/cost/query', label: '成本查询' },
   { path: '/finance/report', label: '财务报表' },

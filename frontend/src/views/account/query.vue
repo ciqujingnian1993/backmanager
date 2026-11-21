@@ -42,9 +42,7 @@
         clearable
         @change="handleFilter"
       >
-        <el-option label="待定" value="pending" />
-        <el-option label="进行中" value="doing" />
-        <el-option label="已完成" value="done" />
+        <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
       </el-select>
       <el-select
         v-model="listQuery.category"
@@ -167,13 +165,8 @@ import OrderItemsTable from './components/OrderItemsTable'
 import { fetchAccountList, fetchAccountDetail } from '@/api/account'
 import { fetchPlatformList } from '@/api/platform'
 import { BIZ_STATUS_OPTIONS, TAX_STATUS_OPTIONS } from '@/constants/license'
+import { ORDER_STATUS_OPTIONS, orderStatusText, orderStatusType } from '@/constants/order'
 import refreshOnActivate from '@/mixins/refresh-on-activate'
-
-const STATUS_MAP = {
-  pending: '待定',
-  doing: '进行中',
-  done: '已完成'
-}
 
 const CATEGORY_OPTIONS = ['同行', '代理记账', '工商注册', '变更注销']
 const DRILL_KEYS = ['status', 'category', 'biz_status', 'tax_status', 'platform', 'keyword', 'id']
@@ -192,6 +185,7 @@ export default {
       platformOptions: [],
       bizStatusOptions: BIZ_STATUS_OPTIONS,
       taxStatusOptions: TAX_STATUS_OPTIONS,
+      statusOptions: ORDER_STATUS_OPTIONS,
       detailVisible: false,
       detailRow: null,
       drill: {},
@@ -224,7 +218,7 @@ export default {
       const parts = []
       if (q.month === 'all') parts.push('全部月份')
       else if (q.month) parts.push(q.month + ' 月')
-      if (q.status) parts.push('状态：' + (STATUS_MAP[q.status] || q.status))
+      if (q.status) parts.push('状态：' + orderStatusText(q.status))
       if (q.category === '__empty__') parts.push('行业：未分类')
       else if (q.category) parts.push('行业：' + q.category)
       if (q.biz_status) parts.push('工商：' + q.biz_status)
@@ -333,10 +327,10 @@ export default {
       return num === Math.trunc(num) ? String(Math.trunc(num)) : String(Math.round(num * 100) / 100)
     },
     statusText(status) {
-      return STATUS_MAP[status] || '待定'
+      return orderStatusText(status)
     },
     statusType(status) {
-      return status === 'done' ? 'success' : status === 'doing' ? 'warning' : 'info'
+      return orderStatusType(status)
     },
     completedText(stamp) {
       if (!stamp) return '—'

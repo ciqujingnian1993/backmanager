@@ -2,8 +2,8 @@
   <div v-loading="loading" class="app-container dashboard">
     <!-- 核心指标 -->
     <el-row :gutter="16" class="stat-row">
-      <el-col v-for="card in cards" :key="card.label" :xs="12" :sm="8" :lg="4">
-        <div class="stat-card" :class="{ 'is-link': !!card.to }" @click="drillCard(card)">
+      <el-col v-for="card in cards" :key="card.label" :xs="12" :sm="8" :lg="card.span || 6">
+        <div class="stat-card" :class="{ 'is-link': !!card.to }" :title="card.tip || ''" @click="drillCard(card)">
           <div class="stat-head">
             <span class="stat-label">{{ card.label }}</span>
             <i v-if="card.to" class="el-icon-arrow-right stat-go" />
@@ -25,7 +25,7 @@
         <el-card shadow="never" class="panel">
           <div slot="header" class="panel-head">
             <span>收支与利润率趋势 · 近 6 个月</span>
-            <span class="panel-tip">金额单位：元 · 点击柱子看当月订单</span>
+            <span class="panel-tip">收入按订单完成月 · 支出按发生月 · 点击柱子看当月开单</span>
           </div>
           <base-chart
             v-if="hasTrend"
@@ -61,7 +61,7 @@
         <el-card shadow="never" class="panel">
           <div slot="header" class="panel-head">
             <span>收入构成</span>
-            <span class="panel-tip">按行业 · 点击看订单</span>
+            <span class="panel-tip">按行业 · 全部订单口径 · 点击看订单</span>
           </div>
           <base-chart
             v-if="kpi.revenue"
@@ -250,16 +250,33 @@ function emptyData() {
   return {
     kpi: {
       revenue: 0,
+      revenue_done: 0,
+      revenue_doing: 0,
+      revenue_pending: 0,
       order_cost: 0,
+      order_cost_done: 0,
+      order_cost_open: 0,
       extra_cost: 0,
       total_cost: 0,
+      total_cost_done: 0,
       profit: 0,
+      profit_done: 0,
       margin: 0,
       orders: 0,
+      count_done: 0,
+      count_doing: 0,
+      count_pending: 0,
       avg_ticket: 0,
+      avg_doing: 0,
+      avg_pending: 0,
       month_revenue: 0,
+      month_revenue_done: 0,
+      month_done_growth: null,
       month_cost: 0,
       month_profit: 0,
+      month_profit_done: 0,
+      month_order_cost_done: 0,
+      month_extra_cost: 0,
       month_growth: null,
       open_orders: 0,
       risk_orders: 0,
@@ -326,34 +343,62 @@ export default {
       const currentMonth = months.length ? months[months.length - 1] : ''
       const orderPath = this.targets.order
       const allOrders = orderPath ? { path: orderPath, query: { month: 'all' }} : null
+      // 总收入只统计已完成订单，穿透过去也要只看已完成，才能和卡片上的数字对上
+      const doneOrders = orderPath ? { path: orderPath, query: { month: 'all', status: 'done' }} : null
       return [
         {
           label: '总收入',
-          value: '￥' + this.money(kpi.revenue),
+          value: '￥' + this.money(kpi.revenue_done),
           tone: 'revenue',
-          foot: '本月 ￥' + this.money(kpi.month_revenue),
-          growth: kpi.month_growth,
-          to: allOrders
+          // 哪个月完成就算哪个月的收入：本月口径 = 本月办结订单的收入
+          foot: '已完成 ' + kpi.count_done + ' 单 · 本月完成 ￥' + this.money(kpi.month_revenue_done),
+          growth: kpi.month_done_growth,
+          to: doneOrders
+        },
+        {
+          label: '在途金额',
+          value: '￥' + this.money(kpi.revenue_doing),
+          tone: 'doing',
+          foot: '进行中 ' + kpi.count_doing + ' 单 · 均 ￥' + this.money(kpi.avg_doing),
+          to: this.targets.progress ? { path: this.targets.progress, query: { status: 'doing' }} : null
+        },
+        {
+          // 在途订单已垫出去的办理成本：办结后随收入一起进净利润口径
+          label: '在途订单成本',
+          value: '￥' + this.money(kpi.order_cost_open),
+          tone: 'pending',
+          foot: '在途 ' + kpi.count_doing + ' 单的成本 · 办结后才计入支出',
+          tip: '进行中订单已填的办理成本合计 ￥' + this.money(kpi.order_cost_open) +
+            '；这些订单还没办结，收入没进总收入，成本也先不扣净利润（见「总支出」卡的已完成 / 在途拆分）',
+          to: this.targets.progress ? { path: this.targets.progress, query: { status: 'doing' }} : null
+        },
+        {
+          label: '净利润',
+          value: '￥' + this.money(kpi.profit_done),
+          tone: 'profit',
+          foot: '已完成收入 − 订单成本 − 其他支出',
+          // 和「总收入 / 总支出」对得上：总收入 ￥X − 总支出里的已完成部分 ￥Y
+          tip: '已完成收入 ￥' + this.money(kpi.revenue_done) +
+            ' − 已完成订单成本 ￥' + this.money(kpi.order_cost_done) +
+            ' − 其他支出 ￥' + this.money(kpi.extra_cost),
+          to: doneOrders
         },
         {
           label: '总支出',
           value: '￥' + this.money(kpi.total_cost),
           tone: 'cost',
-          foot: '订单 ' + this.money(kpi.order_cost) + ' · 其他 ' + this.money(kpi.extra_cost),
+          // 拆成已完成 / 在途两段，净利润只扣前一段，数字才能和总收入对上
+          foot: '已完成 ' + this.money(kpi.total_cost_done) + ' · 在途 ' + this.money(kpi.order_cost_open),
+          tip: '已完成部分 ￥' + this.money(kpi.total_cost_done) +
+            '（订单成本 ￥' + this.money(kpi.order_cost_done) + ' + 其他支出 ￥' + this.money(kpi.extra_cost) + '）' +
+            '，净利润只扣这一段；在途订单成本 ￥' + this.money(kpi.order_cost_open) + ' 对应收入还没进总收入，不计入净利润',
           to: this.targets.cost ? { path: this.targets.cost, query: { month: 'all' }} : null
-        },
-        {
-          label: '净利润',
-          value: '￥' + this.money(kpi.profit),
-          tone: 'profit',
-          foot: '毛利率 ' + kpi.margin + '%',
-          to: allOrders
         },
         {
           label: '订单数',
           value: String(kpi.orders),
           tone: 'total',
-          foot: '平均客单 ￥' + this.money(kpi.avg_ticket),
+          foot: '全部订单 · 平均客单 ￥' + this.money(kpi.avg_ticket),
           to: allOrders
         },
         {
@@ -365,9 +410,15 @@ export default {
         },
         {
           label: '本月利润',
-          value: '￥' + this.money(kpi.month_profit),
+          // 只算本月办结的订单：在途订单的钱还没赚到，不进本月利润
+          value: '￥' + this.money(kpi.month_profit_done),
           tone: 'month',
-          foot: '本月支出 ￥' + this.money(kpi.month_cost),
+          foot: '本月完成 ￥' + this.money(kpi.month_revenue_done) +
+            ' · 支出 ￥' + this.money(kpi.month_order_cost_done + kpi.month_extra_cost),
+          tip: '本月办结订单收入 ￥' + this.money(kpi.month_revenue_done) +
+            ' − 已完成订单成本 ￥' + this.money(kpi.month_order_cost_done) +
+            ' − 其他支出 ￥' + this.money(kpi.month_extra_cost) +
+            '；订单哪个月完成就算哪个月的收入，本月在途订单（' + kpi.count_doing + ' 单）不计入',
           to: orderPath ? { path: orderPath, query: { month: currentMonth || 'all' }} : null
         }
       ]
@@ -439,7 +490,7 @@ export default {
       }
     },
     statusOption() {
-      const colors = { pending: '#909399', doing: '#409eff', done: '#67c23a' }
+      const colors = { pending: '#909399', doing: '#409eff', done: '#67c23a', refunded: '#f56c6c', cancelled: '#c0c4cc' }
       const items = (this.data.status_dist || []).map(item => ({
         name: item.name,
         value: item.count,
@@ -602,9 +653,9 @@ export default {
       if (!month) return
       this.goQuery({ month })
     },
-    // 订单状态环：待定 / 进行中 / 已完成 → 对应状态订单
+    // 订单状态环：点某一段 → 该状态的订单
     handleStatusClick(params) {
-      const map = { 待定: 'pending', 进行中: 'doing', 已完成: 'done' }
+      const map = { 待定: 'pending', 进行中: 'doing', 已完成: 'done', 已退款: 'refunded', 取消订单: 'cancelled' }
       const status = map[params.name]
       if (!status) return
       this.goQuery({ month: 'all', status })
@@ -751,6 +802,8 @@ export default {
     white-space: nowrap;
 
     &.revenue { color: #409eff; }
+    &.doing { color: #0f9d8f; }
+    &.pending { color: #8b93a5; }
     &.cost { color: #f0a020; }
     &.profit { color: #67c23a; }
     &.total { color: #303133; }

@@ -121,6 +121,21 @@ export const asyncRoutes = [
     ]
   },
   {
+    path: '/price',
+    component: Layout,
+    redirect: '/price/index',
+    name: 'PriceConfigMenu',
+    meta: { title: '价格配置', icon: 'money' },
+    children: [
+      {
+        path: 'index',
+        component: () => import('@/views/price/index'),
+        name: 'PriceConfig',
+        meta: { title: '价格配置', icon: 'money' }
+      }
+    ]
+  },
+  {
     path: '/cost',
     component: Layout,
     redirect: '/cost/index',
