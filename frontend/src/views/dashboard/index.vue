@@ -362,7 +362,7 @@ export default {
             this.money(Number(kpi.revenue_done) - Number(kpi.order_cost_done)) +
             ' = 订单总额（已完成订单收入）￥' + this.money(kpi.revenue_done) +
             ' − 已完成订单成本 ￥' + this.money(kpi.order_cost_done) +
-            '；净利润还要再扣其他支出 ￥' + this.money(kpi.extra_cost),
+            '；净利润还要再扣经营成本（所有非订单支出）￥' + this.money(kpi.extra_cost),
           // 哪个月完成就算哪个月的收入：本月口径 = 本月办结订单的收入
           foot: '已完成 ' + kpi.count_done + ' 单 · 本月完成 ￥' + this.money(kpi.month_revenue_done),
           growth: kpi.month_done_growth,
@@ -388,11 +388,15 @@ export default {
           label: '净利润',
           value: '￥' + this.money(kpi.profit_done),
           tone: 'profit',
-          foot: '已完成收入 − 订单成本 − 其他支出',
-          // 和「总收入 / 总支出」对得上：总收入 ￥X − 总支出里的已完成部分 ￥Y
-          tip: '已完成收入 ￥' + this.money(kpi.revenue_done) +
-            ' − 已完成订单成本 ￥' + this.money(kpi.order_cost_done) +
-            ' − 其他支出 ￥' + this.money(kpi.extra_cost),
+          // 净利润 = 总收入（已扣订单成本）− 经营成本（所有不是订单产生的支出）
+          formula: '总收入 ￥' + this.money(Number(kpi.revenue_done) - Number(kpi.order_cost_done)) +
+            '\n− 经营成本 ￥' + this.money(kpi.extra_cost),
+          foot: '总收入 − 经营成本（非订单支出）',
+          tip: '净利润（已完成口径）￥' + this.money(kpi.profit_done) +
+            ' = 总收入（扣除订单成本后）￥' + this.money(Number(kpi.revenue_done) - Number(kpi.order_cost_done)) +
+            ' − 经营成本 ￥' + this.money(kpi.extra_cost) +
+            '；经营成本指所有不是订单产生的支出（房租、水电、推广、办公、人工等，成本记录里除退款外的全部支出），' +
+            '订单成本已在总收入里扣过一次，这里不重复扣；在途订单还没办结，不计入净利润',
           to: doneOrders
         },
         {
@@ -402,8 +406,9 @@ export default {
           // 拆成已完成 / 在途两段，净利润只扣前一段，数字才能和总收入对上
           foot: '已完成 ' + this.money(kpi.total_cost_done) + ' · 在途 ' + this.money(kpi.order_cost_open),
           tip: '已完成部分 ￥' + this.money(kpi.total_cost_done) +
-            '（订单成本 ￥' + this.money(kpi.order_cost_done) + ' + 其他支出 ￥' + this.money(kpi.extra_cost) + '）' +
-            '，净利润只扣这一段；在途订单成本 ￥' + this.money(kpi.order_cost_open) + ' 对应收入还没进总收入，不计入净利润',
+            '（订单成本 ￥' + this.money(kpi.order_cost_done) + ' + 经营成本 ￥' + this.money(kpi.extra_cost) + '）' +
+            '，净利润只扣这一段；经营成本是所有非订单产生的支出。' +
+            '在途订单成本 ￥' + this.money(kpi.order_cost_open) + ' 对应收入还没进总收入，不计入净利润',
           to: this.targets.cost ? { path: this.targets.cost, query: { month: 'all' }} : null
         },
         {
@@ -430,11 +435,11 @@ export default {
           value: '￥' + this.money(kpi.month_profit_done),
           tone: 'month',
           foot: '本月完成 ￥' + this.money(kpi.month_revenue_done) +
-            ' · 支出 ￥' + this.money(kpi.month_order_cost_done + kpi.month_extra_cost),
+            ' · 订单成本+经营成本 ￥' + this.money(kpi.month_order_cost_done + kpi.month_extra_cost),
           tip: '本月办结订单收入 ￥' + this.money(kpi.month_revenue_done) +
             ' − 已完成订单成本 ￥' + this.money(kpi.month_order_cost_done) +
-            ' − 其他支出 ￥' + this.money(kpi.month_extra_cost) +
-            '；订单哪个月完成就算哪个月的收入，本月在途订单（' + kpi.count_doing + ' 单）不计入',
+            ' − 经营成本（非订单支出）￥' + this.money(kpi.month_extra_cost) +
+            '；经营成本是所有不是订单产生的支出，订单哪个月完成就算哪个月的收入，本月在途订单（' + kpi.count_doing + ' 单）不计入',
           to: orderPath ? { path: orderPath, query: { month: currentMonth || 'all' }} : null
         }
       ]

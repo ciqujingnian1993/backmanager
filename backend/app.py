@@ -4821,7 +4821,7 @@ class App(BaseHTTPRequestHandler):
         # 首页「总收入 / 净利润」按已完成订单口径：执照任务没全部办结的订单，
         # 钱还没赚到，收入不进总收入，成本也不参与毛利
         profit_done = revenue_done - order_cost_done - extra_cost_total
-        # 和净利润对得上的支出：已完成订单成本 + 其他支出（在途订单成本单独摆出来，免得对不上账）
+        # 和净利润对得上的支出：已完成订单成本 + 经营成本（在途订单成本单独摆出来，免得对不上账）
         total_cost_done = order_cost_done + extra_cost_total
         order_cost_open = order_cost_total - order_cost_done
         done_count = by_status.get("done", 0)
@@ -4837,7 +4837,7 @@ class App(BaseHTTPRequestHandler):
             if prev_done_revenue else None
         )
         month_cost = trend[current]["cost"]
-        # 本月「已完成口径」毛利：只算已办结订单的收入与成本，其他支出全算
+        # 本月「已完成口径」毛利：只算已办结订单的收入与成本，经营成本全算
         month_profit_done = (
             month_done_revenue
             - trend[current].get("done_cost", 0.0)
@@ -4936,9 +4936,9 @@ class App(BaseHTTPRequestHandler):
                     "order_cost_open": money(order_cost_open),
                     "extra_cost": money(extra_cost_total),
                     "total_cost": money(total_cost),
-                    # 与净利润同口径的支出：已完成订单成本 + 其他支出
+                    # 与净利润同口径的支出：已完成订单成本 + 经营成本
                     "total_cost_done": money(total_cost_done),
-                    # 本月已完成口径的三段（收入 / 订单成本 / 其他支出）
+                    # 本月已完成口径的三段（收入 / 订单成本 / 经营成本）
                     "month_order_cost_done": money(trend[current].get("done_cost", 0.0)),
                     "month_extra_cost": money(trend[current].get("extra_cost", 0.0)),
                     "orders": orders,
