@@ -285,6 +285,7 @@ function emptyData() {
       month_profit_done: 0,
       month_order_cost_done: 0,
       month_extra_cost: 0,
+      month_refund_cost: 0,
       month_growth: null,
       open_orders: 0,
       risk_orders: 0,
@@ -428,26 +429,28 @@ export default {
             '；经营成本是所有非订单产生的支出，订单成本是各订单上填的办理成本（含在途），' +
             '退单成本是取消/退款时退给客户的钱（退款单自动生成）。' +
             '退单成本在「总收入」里作收入抵减、在「总支出」里作现金流出，两个视角各列一次；' +
-            '净利润按「总收入 − 经营成本」算，已包含这笔退单损失',
+            '净利润按「订单总额 − 订单成本 − 退单成本 − 经营成本」算，本月利润另外按取消月扣本月退单损失',
           to: this.targets.cost ? { path: this.targets.cost, query: { month: 'all' }} : null
         },
         {
           // 去掉「在途订单成本」单卡后共 7 张：首行 4 张各占 6 格，第二行 3 张各占 8 格，两行都铺满 24 栅格
           label: '本月利润',
           span: 8,
-          // 本月完成订单金额 − 本月订单成本 − 本月经营成本；在途订单不计入
+          // 本月完成订单金额 − 本月订单成本 − 本月经营成本 − 本月退单成本；在途订单不计入
           value: '￥' + this.money(kpi.month_profit_done),
           tone: 'month',
           // 与总收入 / 净利润 / 总支出一致：结果后面列出公式，注明每个数字怎么来的
           formula: '本月完成订单金额 ￥' + this.money(kpi.month_revenue_done) +
             '\n− 本月订单成本 ￥' + this.money(kpi.month_order_cost_done) +
-            '\n− 本月经营成本 ￥' + this.money(kpi.month_extra_cost),
-          foot: '本月完成 − 本月订单成本 − 本月经营成本',
+            '\n− 本月经营成本 ￥' + this.money(kpi.month_extra_cost) +
+            '\n− 本月退单成本 ￥' + this.money(kpi.month_refund_cost),
+          foot: '本月完成 − 本月订单成本 − 本月经营成本 − 本月退单成本',
           tip: '本月利润（仅本月办结订单）￥' + this.money(kpi.month_profit_done) +
             ' = 本月完成订单金额（本月办结订单的收入，订单哪个月完成就算哪个月）￥' + this.money(kpi.month_revenue_done) +
             ' − 本月订单成本（这些本月办结订单的办理成本）￥' + this.money(kpi.month_order_cost_done) +
             ' − 本月经营成本（本月发生的非订单支出，按支出发生月归集）￥' + this.money(kpi.month_extra_cost) +
-            '；本月在途订单（' + kpi.count_doing + ' 单）还没办结，收入与成本都不计入；退单成本只在总收入/总支出里列示，不计入本月利润',
+            ' − 本月退单成本（订单哪个月取消/退款，就算哪个月）￥' + this.money(kpi.month_refund_cost) +
+            '；本月在途订单（' + kpi.count_doing + ' 单）还没办结，收入与成本都不计入',
           to: orderPath ? { path: orderPath, query: { month: currentMonth || 'all' }} : null
         },
         {
