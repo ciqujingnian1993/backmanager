@@ -84,6 +84,8 @@
       border
       fit
       highlight-current-row
+      show-summary
+      :summary-method="summaryMethod"
       :row-class-name="rowClassName"
       style="width: 100%"
     >
@@ -280,6 +282,7 @@ export default {
       loading: false,
       saving: false,
       total: 0,
+      filteredAmount: 0, // 当前筛选条件下全部记录的金额合计（后端按筛选算，不受分页影响）
       list: [],
       orders: [],
       categories: [],
@@ -353,6 +356,19 @@ export default {
         remark: ''
       }
     },
+    // 表格底部合计行：金额列用后端按当前筛选算出的总和（不受分页影响），第一列给标签
+    summaryMethod({ columns }) {
+      const cells = columns.map(column => {
+        if (column.property === 'biz_date') {
+          return `当前筛选合计（共 ${this.total} 条）`
+        }
+        if (column.label === '金额') {
+          return '￥' + this.money(this.filteredAmount)
+        }
+        return ''
+      })
+      return cells
+    },
     refresh() {
       this.getList()
       this.getSummary()
@@ -374,6 +390,7 @@ export default {
         const { data } = await fetchCostList(params)
         this.list = data.items || []
         this.total = data.total || 0
+        this.filteredAmount = data.amount || 0
         if (data.categories && data.categories.length) this.categories = data.categories
       } finally {
         this.loading = false
@@ -512,6 +529,13 @@ export default {
 .cost-panel ::v-deep .row-deleted {
   color: #a8abb2;
   background: #fafafa;
+}
+
+// 表格底部合计行：醒目底色，金额右对齐加粗
+.cost-panel ::v-deep .el-table__footer-wrapper {
+  td { background: #f0f7ff; }
+  .cell { font-weight: 600; }
+  td:first-child .cell { color: #409eff; }
 }
 .cost-panel {
   .stat-row {
