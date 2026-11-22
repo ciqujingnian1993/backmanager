@@ -4797,12 +4797,15 @@ class App(BaseHTTPRequestHandler):
             client_bucket["orders"] += 1
 
         extra_cost_total = 0.0
+        refund_cost_total = 0.0
         cost_by_category = {}
         for row in costs:
-            # 退款已在订单收入里冲减，首页再算一次支出会把利润扣重
-            if (row.get("kind") or "") == "refund":
-                continue
             amount = float(row["amount"] or 0)
+            # 退单成本（取消/退款时退给客户的钱）是真实现金流出，但金额已在订单收入里冲减，
+            # 所以不参与利润计算，只单独归集给首页「总支出」展示
+            if (row.get("kind") or "") == "refund":
+                refund_cost_total += amount
+                continue
             extra_cost_total += amount
             month = biz_month_key(row["biz_date"], row.get("created_at"))
             if month in trend:
@@ -4817,6 +4820,8 @@ class App(BaseHTTPRequestHandler):
             trend[key]["profit"] = trend[key]["revenue"] - trend[key]["cost"]
 
         total_cost = order_cost_total + extra_cost_total
+        # 总支出（全部现金流出）= 经营成本 + 订单成本 + 退单成本；只用于展示，不参与利润
+        total_cost_all = total_cost + refund_cost_total
         profit_total = revenue_total - total_cost
         # 首页「总收入 / 净利润」按已完成订单口径：执照任务没全部办结的订单，
         # 钱还没赚到，收入不进总收入，成本也不参与毛利
@@ -4935,7 +4940,11 @@ class App(BaseHTTPRequestHandler):
                     # 在途（未办结）订单的成本，不进净利润，单独展示好对账
                     "order_cost_open": money(order_cost_open),
                     "extra_cost": money(extra_cost_total),
+                    # 退单成本：取消/退款时退给客户的钱，已在订单收入里冲减，不重复扣利润
+                    "refund_cost": money(refund_cost_total),
                     "total_cost": money(total_cost),
+                    # 首页「总支出」用这个：经营成本 + 订单成本 + 退单成本
+                    "total_cost_all": money(total_cost_all),
                     # 与净利润同口径的支出：已完成订单成本 + 经营成本
                     "total_cost_done": money(total_cost_done),
                     # 本月已完成口径的三段（收入 / 订单成本 / 经营成本）

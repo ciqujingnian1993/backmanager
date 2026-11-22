@@ -81,10 +81,10 @@
         <el-card shadow="never" class="panel">
           <div slot="header" class="panel-head">
             <span>成本构成</span>
-            <span class="panel-tip">合计 {{ money(kpi.total_cost) }} 元 · 点击看明细</span>
+            <span class="panel-tip">经营成本合计 {{ money(kpi.extra_cost) }} 元 · 点击看明细</span>
           </div>
           <base-chart
-            v-if="kpi.total_cost"
+            v-if="kpi.extra_cost"
             :option="costOption"
             height="290px"
             clickable
@@ -261,7 +261,9 @@ function emptyData() {
       order_cost_done: 0,
       order_cost_open: 0,
       extra_cost: 0,
+      refund_cost: 0,
       total_cost: 0,
+      total_cost_all: 0,
       total_cost_done: 0,
       profit: 0,
       profit_done: 0,
@@ -380,7 +382,7 @@ export default {
             this.money(Number(kpi.revenue_doing) - Number(kpi.order_cost_open)) +
             ' = 在途订单金额（进行中 ' + kpi.count_doing + ' 单的收入）￥' + this.money(kpi.revenue_doing) +
             ' − 在途订单成本（未办结订单已垫的办理成本）￥' + this.money(kpi.order_cost_open) +
-            '；这些订单还没办结，收入不计入总收入，成本也不扣净利润（与「总支出」卡的在途拆分同一个数）',
+            '；这些订单还没办结，收入不计入总收入，成本也不扣净利润',
           foot: '进行中 ' + kpi.count_doing + ' 单 · 均 ￥' + this.money(kpi.avg_doing),
           to: this.targets.progress ? { path: this.targets.progress, query: { status: 'doing' }} : null
         },
@@ -401,14 +403,20 @@ export default {
         },
         {
           label: '总支出',
-          value: '￥' + this.money(kpi.total_cost),
+          // 总支出（全部现金流出）= 经营成本 + 订单成本 + 退单成本
+          value: '￥' + this.money(kpi.total_cost_all),
           tone: 'cost',
-          // 拆成已完成 / 在途两段，净利润只扣前一段，数字才能和总收入对上
-          foot: '已完成 ' + this.money(kpi.total_cost_done) + ' · 在途 ' + this.money(kpi.order_cost_open),
-          tip: '已完成部分 ￥' + this.money(kpi.total_cost_done) +
-            '（订单成本 ￥' + this.money(kpi.order_cost_done) + ' + 经营成本 ￥' + this.money(kpi.extra_cost) + '）' +
-            '，净利润只扣这一段；经营成本是所有非订单产生的支出。' +
-            '在途订单成本 ￥' + this.money(kpi.order_cost_open) + ' 对应收入还没进总收入，不计入净利润',
+          formula: '经营成本 ￥' + this.money(kpi.extra_cost) +
+            '\n+ 订单成本 ￥' + this.money(kpi.order_cost) +
+            '\n+ 退单成本 ￥' + this.money(kpi.refund_cost),
+          foot: '经营成本 + 订单成本 + 退单成本',
+          tip: '总支出（全部现金流出）￥' + this.money(kpi.total_cost_all) +
+            ' = 经营成本 ￥' + this.money(kpi.extra_cost) +
+            ' + 订单成本 ￥' + this.money(kpi.order_cost) +
+            ' + 退单成本 ￥' + this.money(kpi.refund_cost) +
+            '；经营成本是所有非订单产生的支出，订单成本是各订单上填的办理成本（含在途），' +
+            '退单成本是取消/退款时退给客户的钱（退款单自动生成）。' +
+            '退单成本已在订单收入里冲减过，不重复计入净利润；净利润只按「总收入 − 经营成本」算，两者口径不同',
           to: this.targets.cost ? { path: this.targets.cost, query: { month: 'all' }} : null
         },
         {
@@ -777,9 +785,9 @@ export default {
     border-radius: 6px;
     padding: 14px 16px;
     margin-bottom: 16px;
-    // 「总收入 / 在途收入金额」两张卡各有公式，长公式可能折成两行；统一最小高度保证 7 张卡同行等高
+    // 「总收入 / 在途收入金额 / 总支出」三张卡带公式，总支出是三行；统一最小高度保证 7 张卡同行等高
     box-sizing: border-box;
-    min-height: 144px;
+    min-height: 160px;
     box-shadow: 0 1px 6px rgba(0, 21, 255, 0.06);
     border-left: 3px solid #dcdfe6;
     transition: box-shadow 0.2s, transform 0.2s;
