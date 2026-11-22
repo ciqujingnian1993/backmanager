@@ -427,22 +427,6 @@ export default {
         },
         {
           // 去掉「在途订单成本」单卡后共 7 张：首行 4 张各占 6 格，第二行 3 张各占 8 格，两行都铺满 24 栅格
-          label: '订单数',
-          span: 8,
-          value: String(kpi.orders),
-          tone: 'total',
-          foot: '全部订单 · 平均客单 ￥' + this.money(kpi.avg_ticket),
-          to: allOrders
-        },
-        {
-          label: '待办订单',
-          span: 8,
-          value: String(kpi.open_orders),
-          tone: 'warn',
-          foot: '高风险 ' + kpi.risk_orders + ' 单',
-          to: this.targets.progress ? { path: this.targets.progress } : null
-        },
-        {
           label: '本月利润',
           span: 8,
           // 本月完成订单金额 − 本月订单成本 − 本月经营成本；在途订单不计入
@@ -459,6 +443,22 @@ export default {
             ' − 本月经营成本（本月发生的非订单支出，按支出发生月归集）￥' + this.money(kpi.month_extra_cost) +
             '；本月在途订单（' + kpi.count_doing + ' 单）还没办结，收入与成本都不计入；退单成本只在总收入/总支出里列示，不计入本月利润',
           to: orderPath ? { path: orderPath, query: { month: currentMonth || 'all' }} : null
+        },
+        {
+          label: '订单数',
+          span: 8,
+          value: String(kpi.orders),
+          tone: 'total',
+          foot: '全部订单 · 平均客单 ￥' + this.money(kpi.avg_ticket),
+          to: allOrders
+        },
+        {
+          label: '待办订单',
+          span: 8,
+          value: String(kpi.open_orders),
+          tone: 'warn',
+          foot: '高风险 ' + kpi.risk_orders + ' 单',
+          to: this.targets.progress ? { path: this.targets.progress } : null
         }
       ]
     },
