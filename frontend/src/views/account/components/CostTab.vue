@@ -91,7 +91,7 @@
       <el-table-column label="类别" width="112" align="center">
         <template slot-scope="{ row }">
           <el-tag size="mini" :type="categoryType(row.category)">{{ row.category || '未分类' }}</el-tag>
-          <span v-if="row.kind === 'refund'" class="auto-tag" title="订单退款自动生成">自动</span>
+          <span v-if="row.kind === 'refund'" class="auto-tag" title="订单退款自动生成，现在可直接编辑">自动</span>
         </template>
       </el-table-column>
       <el-table-column prop="payee" label="收款方" min-width="140" />
@@ -124,12 +124,12 @@
             @click="handleRestore(row)"
           >恢复</el-button>
           <template v-else>
-            <el-button type="primary" size="mini" :disabled="row.kind === 'refund'" @click="handleUpdate(row)">编辑</el-button>
+            <el-button type="primary" size="mini" @click="handleUpdate(row)">编辑</el-button>
             <el-button
               type="danger"
               size="mini"
               :disabled="row.kind === 'refund'"
-              :title="row.kind === 'refund' ? '退款记录由订单退款自动生成，请到订单进度里处理' : ''"
+              :title="row.kind === 'refund' ? '退款记录与订单退款金额关联，暂不允许删除；如需修改请点「编辑」' : ''"
               @click="handleDelete(row)"
             >删除</el-button>
           </template>
@@ -150,6 +150,15 @@
       :visible.sync="dialogVisible"
       width="620px"
     >
+      <el-alert
+        v-if="dialogType === 'edit' && form.kind === 'refund'"
+        class="refund-edit-tip"
+        type="warning"
+        show-icon
+        :closable="false"
+        title="订单退款自动生成的记录，现在可以直接编辑"
+        description="修改金额会同步影响首页的「退单成本」及总收入 / 净利润 / 总支出，但不会改动订单里的退款金额；类别请保持「退款」以免口径不一致。"
+      />
       <el-form ref="costForm" :model="form" :rules="rules" label-width="90px">
         <el-row :gutter="16">
           <el-col :span="12">
@@ -566,6 +575,11 @@ export default {
 
   .muted {
     color: #c0c4cc;
+  }
+
+  .refund-edit-tip {
+    margin-bottom: 14px;
+    line-height: 1.5;
   }
 }
 </style>
