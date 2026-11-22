@@ -357,7 +357,7 @@ export default {
           tone: Number(kpi.revenue_done) - Number(kpi.order_cost_done) < 0 ? 'warn' : 'revenue',
           // 结果后面给出公式，并注明每个数字是怎么来的
           formula: '订单总额 ￥' + this.money(kpi.revenue_done) +
-            ' − 订单成本 ￥' + this.money(kpi.order_cost_done),
+            '\n− 订单成本 ￥' + this.money(kpi.order_cost_done),
           tip: '总收入（扣除订单成本后）￥' +
             this.money(Number(kpi.revenue_done) - Number(kpi.order_cost_done)) +
             ' = 订单总额（已完成订单收入）￥' + this.money(kpi.revenue_done) +
@@ -369,20 +369,19 @@ export default {
           to: doneOrders
         },
         {
-          label: '在途金额',
-          value: '￥' + this.money(kpi.revenue_doing),
-          tone: 'doing',
+          label: '在途收入金额',
+          // 主数值 = 扣除在途订单成本后的在途收入：在途订单金额 − 在途订单成本
+          value: '￥' + this.money(Number(kpi.revenue_doing) - Number(kpi.order_cost_open)),
+          tone: Number(kpi.revenue_doing) - Number(kpi.order_cost_open) < 0 ? 'warn' : 'doing',
+          // 结果后面给出公式，注明每个数字是什么、怎么算来的
+          formula: '在途订单金额 ￥' + this.money(kpi.revenue_doing) +
+            '\n− 在途订单成本 ￥' + this.money(kpi.order_cost_open),
+          tip: '在途收入金额（扣除在途订单成本后）￥' +
+            this.money(Number(kpi.revenue_doing) - Number(kpi.order_cost_open)) +
+            ' = 在途订单金额（进行中 ' + kpi.count_doing + ' 单的收入）￥' + this.money(kpi.revenue_doing) +
+            ' − 在途订单成本（未办结订单已垫的办理成本）￥' + this.money(kpi.order_cost_open) +
+            '；这些订单还没办结，收入不计入总收入，成本也不扣净利润（与「总支出」卡的在途拆分同一个数）',
           foot: '进行中 ' + kpi.count_doing + ' 单 · 均 ￥' + this.money(kpi.avg_doing),
-          to: this.targets.progress ? { path: this.targets.progress, query: { status: 'doing' }} : null
-        },
-        {
-          // 在途订单已垫出去的办理成本：办结后随收入一起进净利润口径
-          label: '在途订单成本',
-          value: '￥' + this.money(kpi.order_cost_open),
-          tone: 'pending',
-          foot: '在途 ' + kpi.count_doing + ' 单的成本 · 办结后才计入支出',
-          tip: '进行中订单已填的办理成本合计 ￥' + this.money(kpi.order_cost_open) +
-            '；这些订单还没办结，收入没进总收入，成本也先不扣净利润（见「总支出」卡的已完成 / 在途拆分）',
           to: this.targets.progress ? { path: this.targets.progress, query: { status: 'doing' }} : null
         },
         {
@@ -408,7 +407,9 @@ export default {
           to: this.targets.cost ? { path: this.targets.cost, query: { month: 'all' }} : null
         },
         {
+          // 去掉「在途订单成本」单卡后共 7 张：首行 4 张各占 6 格，第二行 3 张各占 8 格，两行都铺满 24 栅格
           label: '订单数',
+          span: 8,
           value: String(kpi.orders),
           tone: 'total',
           foot: '全部订单 · 平均客单 ￥' + this.money(kpi.avg_ticket),
@@ -416,6 +417,7 @@ export default {
         },
         {
           label: '待办订单',
+          span: 8,
           value: String(kpi.open_orders),
           tone: 'warn',
           foot: '高风险 ' + kpi.risk_orders + ' 单',
@@ -423,6 +425,7 @@ export default {
         },
         {
           label: '本月利润',
+          span: 8,
           // 只算本月办结的订单：在途订单的钱还没赚到，不进本月利润
           value: '￥' + this.money(kpi.month_profit_done),
           tone: 'month',
@@ -769,9 +772,9 @@ export default {
     border-radius: 6px;
     padding: 14px 16px;
     margin-bottom: 16px;
-    // 总收入卡多一行计算公式，统一最小高度，避免同行卡片错位
+    // 「总收入 / 在途收入金额」两张卡各有公式，长公式可能折成两行；统一最小高度保证 7 张卡同行等高
     box-sizing: border-box;
-    min-height: 118px;
+    min-height: 144px;
     box-shadow: 0 1px 6px rgba(0, 21, 255, 0.06);
     border-left: 3px solid #dcdfe6;
     transition: box-shadow 0.2s, transform 0.2s;
@@ -838,7 +841,8 @@ export default {
     color: #909399;
 
     .formula-eq { flex: none; color: #c0c4cc; font-weight: 600; }
-    .formula-text { word-break: break-word; }
+    // 公式按语义分成「金额」「− 成本」两行，避免长数字被自动折成一个孤零零的尾行
+    .formula-text { white-space: pre-line; word-break: break-word; }
   }
 
   .stat-foot {
