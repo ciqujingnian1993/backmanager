@@ -151,6 +151,14 @@
           </template>
         </template>
       </el-table-column>
+      <!-- 成本：与金额同口径，显示这条执照明细的办理成本；同一订单多行累加即整单成本 -->
+      <el-table-column label="成本" width="104" align="right">
+        <template slot-scope="{ row }">
+          <template v-if="!row._sub">
+            <div class="cost-cell" title="该执照的办理成本">{{ row.cost === null || row.cost === undefined ? '—' : amount(row.cost) }}</div>
+          </template>
+        </template>
+      </el-table-column>
       <!-- 细分任务：主任务行显示「已办结/总数」，点一下就地展开；细分行显示它属于哪条办理线 -->
       <el-table-column label="细分任务" width="104" align="center">
         <template slot-scope="{ row }">
@@ -2318,6 +2326,13 @@ export default {
   &.is-refunded {
     color: #a8abb2;
   }
+}
+
+// 成本列：等宽字体与金额列对齐，橙棕色区分「支出」语义，浅蓝底主任务行也可读
+.cost-cell {
+  font-family: Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #b26a00;
 }
 
 .refund-tag {
