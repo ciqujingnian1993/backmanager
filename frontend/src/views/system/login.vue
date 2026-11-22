@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h3 class="page-title">登录管理</h3>
-        <p class="page-desc">记录每个账号什么时候登录系统、从哪里登录、用的什么设备，以及当前是否在线。</p>
+        <p class="page-desc">记录每个账号什么时候登录系统、从哪里登录、用的什么设备，以及当前是否在线。连续 3 小时无操作会自动下线。</p>
       </div>
       <el-button icon="el-icon-refresh" @click="getList">刷新</el-button>
     </div>
@@ -86,6 +86,11 @@
       </el-table-column>
       <el-table-column prop="name" label="姓名" min-width="110" show-overflow-tooltip />
       <el-table-column prop="login_time" label="登录时间（北京时间）" width="170" align="center" />
+      <el-table-column prop="last_activity" label="最后活动（北京时间）" width="170" align="center">
+        <template slot-scope="{ row }">
+          <span class="muted">{{ row.last_activity || '—' }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="状态" width="100" align="center">
         <template slot-scope="{ row }">
           <el-tag :type="row.online ? 'success' : 'info'" size="mini">

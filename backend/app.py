@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import time
 import traceback
 import urllib.request
@@ -1187,8 +1188,12 @@ def init_db():
         CREATE TABLE IF NOT EXISTS sessions (
             token text PRIMARY KEY,
             user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            created_at timestamptz NOT NULL DEFAULT now()
+            created_at timestamptz NOT NULL DEFAULT now(),
+            last_seen_at timestamptz NOT NULL DEFAULT now()
         )
+        """,
+        """
+        ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_seen_at timestamptz NOT NULL DEFAULT now()
         """,
         # 登录日志：谁、什么时候、从哪个 IP / 归属地、用什么设备上的系统。
         # token 用来和 sessions 对账，能看出当前是否在线、是主动退出还是被顶下线。
@@ -1204,8 +1209,12 @@ def init_db():
             ip text NOT NULL DEFAULT '',
             location text NOT NULL DEFAULT '',
             user_agent text NOT NULL DEFAULT '',
-            device text NOT NULL DEFAULT ''
+            device text NOT NULL DEFAULT '',
+            last_seen_at timestamptz
         )
+        """,
+        """
+        ALTER TABLE login_logs ADD COLUMN IF NOT EXISTS last_seen_at timestamptz
         """,
         """
         CREATE INDEX IF NOT EXISTS login_logs_login_at_idx ON login_logs (login_at DESC)
@@ -1656,6 +1665,7 @@ def init_db():
             ensure_finance_route(cur)
             seed_menus(cur)
             invalidate_sessions_on_restart(cur)
+            expire_idle_sessions(cur, force=True)
             seed_platforms(cur)
             seed_biz_items(cur)
             seed_prices(cur)
@@ -2080,6 +2090,70 @@ def seed_menus(cur):
             """,
             (path, title, icon, parent, sort),
         )
+
+
+# 空闲超时：3 小时没有任何真实操作（前端心跳只在有操作时续期）就自动下线
+IDLE_TIMEOUT_SECONDS = 3 * 3600
+_last_idle_sweep = [0.0]
+
+
+def expire_idle_sessions(cur=None, force=False):
+    """把超过 3 小时没活动的会话作废，登录日志标记「空闲超时下线」。"""
+    if not force and time.time() - _last_idle_sweep[0] < 30:
+        return
+    _last_idle_sweep[0] = time.time()
+    owns_conn = cur is None
+    conn = connect() if owns_conn else None
+    try:
+        cur = conn.cursor() if owns_conn else cur
+        cur.execute(
+            """
+            UPDATE login_logs l
+               SET logout_at = now(), end_reason = 'idle', last_seen_at = s.last_seen_at
+              FROM sessions s
+             WHERE l.token = s.token AND l.logout_at IS NULL
+               AND s.last_seen_at < now() - %s * interval '1 second'
+            """,
+            (IDLE_TIMEOUT_SECONDS,),
+        )
+        cur.execute(
+            "DELETE FROM sessions WHERE last_seen_at < now() - %s * interval '1 second'",
+            (IDLE_TIMEOUT_SECONDS,),
+        )
+        if owns_conn:
+            conn.commit()
+    except Exception as exc:
+        if owns_conn:
+            conn.rollback()
+        print("idle sweep failed:", exc, flush=True)
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def touch_session(token):
+    """用户有真实操作时续期；同一会话 30 秒内只写一次库，避免请求洪峰打库。"""
+    if not token:
+        return
+    if time.time() - _last_idle_sweep[0] >= 30:
+        expire_idle_sessions()
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE sessions SET last_seen_at = now()
+                 WHERE token = %s AND last_seen_at < now() - interval '30 seconds'
+                """,
+                (token,),
+            )
+            cur.execute(
+                """
+                UPDATE login_logs SET last_seen_at = now()
+                 WHERE token = %s AND logout_at IS NULL
+                   AND (last_seen_at IS NULL OR last_seen_at < now() - interval '30 seconds')
+                """,
+                (token,),
+            )
 
 
 def invalidate_sessions_on_restart(cur):
@@ -2537,6 +2611,8 @@ class App(BaseHTTPRequestHandler):
                 return "该账号已在其他设备登录，当前会话已下线，请重新登录"
             if reason == "logout":
                 return "已退出登录，请重新登录"
+            if reason == "idle":
+                return "长时间未操作，会话已超时，请重新登录"
         except Exception:
             pass
         return "登录已失效，请重新登录"
@@ -2559,6 +2635,9 @@ class App(BaseHTTPRequestHandler):
         token = self.headers.get("X-Token") or query.get("token")
         if not token:
             return None
+        # check=1 是「只读检查」心跳：空闲超过 3 小时后只想知道会话是否已被踢，
+        # 不能给会话续期，否则页面挂着不动也永远不会超时
+        check_only = str(query.get("check") or "") == "1"
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
@@ -2569,7 +2648,10 @@ class App(BaseHTTPRequestHandler):
                     """,
                     (token,),
                 )
-                return cur.fetchone()
+                row = cur.fetchone()
+        if row and not check_only:
+            touch_session(token)
+        return row
 
     @staticmethod
     def is_admin(user):
@@ -2657,7 +2739,7 @@ class App(BaseHTTPRequestHandler):
                 cur.execute(
                     """
                     SELECT l.id, l.user_id, l.username, COALESCE(u.name, l.username) AS name,
-                           l.login_at, l.logout_at, l.end_reason, l.ip, l.location,
+                           l.login_at, l.logout_at, l.last_seen_at, l.end_reason, l.ip, l.location,
                            l.device, l.user_agent, (s.token IS NOT NULL) AS online
                     """
                     + joins + condition
@@ -2694,7 +2776,12 @@ class App(BaseHTTPRequestHandler):
                     {"username": row["username"], "name": row["name"]}
                     for row in cur.fetchall()
                 ]
-        end_labels = {"logout": "主动退出", "kicked": "被新登录顶下线", "restart": "系统重启下线"}
+        end_labels = {
+            "logout": "主动退出",
+            "kicked": "被新登录顶下线",
+            "restart": "系统重启下线",
+            "idle": "3小时未操作自动下线",
+        }
         items = []
         for row in rows:
             reason = row.get("end_reason") or ""
@@ -2705,6 +2792,7 @@ class App(BaseHTTPRequestHandler):
                 "name": row["name"] or row["username"],
                 "login_time": cn_time(row["login_at"]),
                 "logout_time": cn_time(row["logout_at"]),
+                "last_activity": cn_time(row["last_seen_at"]),
                 "online": bool(row["online"]),
                 "end_reason": end_labels.get(reason, ""),
                 "ip": row["ip"] or "",
@@ -6177,9 +6265,20 @@ class App(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
+def idle_session_sweeper():
+    """后台定时清理：即使没人请求接口，登录管理页也能看到超时会话自动下线。"""
+    while True:
+        time.sleep(30)
+        try:
+            expire_idle_sessions(force=True)
+        except Exception as exc:
+            print("idle sweeper error:", exc, flush=True)
+
+
 def main():
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     init_db()
+    threading.Thread(target=idle_session_sweeper, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), App)
     print("vue-admin-api listening on %s:%s" % (HOST, PORT), flush=True)
     server.serve_forever()

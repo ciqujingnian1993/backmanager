@@ -17,12 +17,12 @@ export function getInfo(token, silent) {
   })
 }
 
-// 会话心跳：只探测 token 是否被顶下线，返回体极小
-export function ping(token) {
+// 会话心跳：check=true 时只读检查会话是否已被踢，不计入「最后活动时间」
+export function ping(token, check) {
   return request({
     url: '/vue-element-admin/user/ping',
     method: 'get',
-    params: { token },
+    params: { token, check: check ? 1 : 0 },
     silent: true
   })
 }
