@@ -6,7 +6,7 @@ import { getToken } from '@/utils/auth'
 let sessionExpiredHandling = false
 
 /**
- * 会话失效（被其他设备顶下线 / token 过期）：提示后强制退回登录页，
+ * 会话失效（系统重启 / 被其他设备顶下线 / token 过期）：提示后强制退回登录页，
  * 不给「继续留在页面」的选项，避免旧设备继续操作数据
  *
  * staleToken：本次请求实际带出去的 token。
@@ -14,7 +14,7 @@ let sessionExpiredHandling = false
  * 它们返回 50008 时如果无脑重置，会把另一个标签页刚登录拿到的新 token 一起删掉，
  * 表现就是「刚登录又被踢回登录页」。所以只有失效的正是当前 token 才真的退出。
  */
-function handleSessionExpired(staleToken) {
+function handleSessionExpired(staleToken, reason) {
   if (sessionExpiredHandling) return
   const current = getToken()
   if (staleToken && current && staleToken !== current) return
@@ -22,8 +22,8 @@ function handleSessionExpired(staleToken) {
   store.dispatch('user/resetToken').finally(() => {
     Message.closeAll()
     try {
-      // 用 sessionStorage 传标记：reload 后路由守卫会重写 URL 的 query，URL 参数会丢
-      sessionStorage.setItem('session_expired', '1')
+      // 用 sessionStorage 传失效原因：reload 后路由守卫会重写 URL 的 query，URL 参数会丢
+      sessionStorage.setItem('session_expired', reason || '登录已失效，请重新登录')
     } catch (e) { /* 隐私模式下 sessionStorage 可能不可用，忽略 */ }
     // 只 reload 一次：路由守卫发现没有 token 会自动带去登录页，
     // 若先改 href 再 reload，会产生两次跳转把提示冲掉
@@ -74,9 +74,9 @@ service.interceptors.response.use(
   response => {
     const res = response.data
 
-    // 50008: 无效/已失效 token（含被其他设备顶下线）；50012: 其他端登录；50014: token 过期
+    // 50008: 无效/已失效 token（含系统重启、被其他设备顶下线）；50012: 其他端登录；50014: token 过期
     if (res.code === 50008 || res.code === 50012 || res.code === 50014) {
-      handleSessionExpired(response.config.headers && response.config.headers['X-Token'])
+      handleSessionExpired(response.config.headers && response.config.headers['X-Token'], res.message)
       return Promise.reject(new Error(res.message || 'Error'))
     }
 

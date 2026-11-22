@@ -101,10 +101,10 @@ export default {
   },
   created() {
     // window.addEventListener('storage', this.afterQRScan)
-    // 被其他设备顶下线后跳回这里，明确告知原因
+    // 会话失效后跳回这里，明确告知原因（系统重启 / 被顶下线 / 退出等）
     if (this.$route.query.expired) {
       this.$message({
-        message: '该账号已在其他设备登录，当前会话已下线，请重新登录',
+        message: this.$route.query.expired || '登录已失效，请重新登录',
         type: 'warning',
         duration: 8000,
         showClose: true

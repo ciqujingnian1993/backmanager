@@ -1655,7 +1655,7 @@ def init_db():
             sync_account_route(cur)
             ensure_finance_route(cur)
             seed_menus(cur)
-            backfill_login_logs(cur)
+            invalidate_sessions_on_restart(cur)
             seed_platforms(cur)
             seed_biz_items(cur)
             seed_prices(cur)
@@ -2082,16 +2082,25 @@ def seed_menus(cur):
         )
 
 
-def backfill_login_logs(cur):
-    """升级上线时把当前还在线的旧会话补进日志，页面不会一上来就是空的。"""
+def invalidate_sessions_on_restart(cur):
+    """服务/系统重启后旧登录态一律作废：补记历史会话、标记重启下线，再清空 sessions。"""
     cur.execute(
         """
-        INSERT INTO login_logs (user_id, username, token, login_at, ip, location, device)
-        SELECT s.user_id, u.username, s.token, s.created_at, '', '历史会话（升级前）', '旧会话'
+        INSERT INTO login_logs
+            (user_id, username, token, login_at, logout_at, end_reason, ip, location, device)
+        SELECT s.user_id, u.username, s.token, s.created_at, now(), 'restart',
+               '', '历史会话（重启前）', '旧会话'
           FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE NOT EXISTS (SELECT 1 FROM login_logs l WHERE l.token = s.token)
         """
     )
+    cur.execute(
+        """
+        UPDATE login_logs SET logout_at = now(), end_reason = 'restart'
+         WHERE logout_at IS NULL AND token IN (SELECT token FROM sessions)
+        """
+    )
+    cur.execute("DELETE FROM sessions")
 
 
 def sync_account_route(cur):
@@ -2259,11 +2268,11 @@ class App(BaseHTTPRequestHandler):
             if path != "/vue-element-admin/user/login":
                 user = self.current_user(query)
                 if user is None and path != "/health":
-                    # 带了 token 却查不到 = 被同一账号在别处登录顶下线
-                    has_token = bool(self.headers.get("X-Token") or query.get("token"))
+                    # 带了 token 却查不到会话：可能是系统重启、被其他设备顶下线或主动退出
+                    token = self.headers.get("X-Token") or query.get("token")
                     message = (
-                        "该账号已在其他设备登录，当前会话已下线，请重新登录"
-                        if has_token else "登录已失效，请重新登录"
+                        self.session_expired_message(token)
+                        if token else "登录已失效，请重新登录"
                     )
                     self.send_json({"code": 50008, "message": message})
                     return
@@ -2510,6 +2519,28 @@ class App(BaseHTTPRequestHandler):
             },
         })
 
+    def session_expired_message(self, token):
+        """按登录日志里的结束原因给出准确的下线提示，避免重启后还提示被顶下线。"""
+        try:
+            with connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT end_reason FROM login_logs WHERE token = %s"
+                        " ORDER BY id DESC LIMIT 1",
+                        (token,),
+                    )
+                    row = cur.fetchone()
+            reason = (row[0] if row else "") or ""
+            if reason == "restart":
+                return "系统已重启，之前的登录已失效，请重新登录"
+            if reason == "kicked":
+                return "该账号已在其他设备登录，当前会话已下线，请重新登录"
+            if reason == "logout":
+                return "已退出登录，请重新登录"
+        except Exception:
+            pass
+        return "登录已失效，请重新登录"
+
     def logout(self):
         token = self.headers.get("X-Token")
         if token:
@@ -2663,7 +2694,7 @@ class App(BaseHTTPRequestHandler):
                     {"username": row["username"], "name": row["name"]}
                     for row in cur.fetchall()
                 ]
-        end_labels = {"logout": "主动退出", "kicked": "被新登录顶下线"}
+        end_labels = {"logout": "主动退出", "kicked": "被新登录顶下线", "restart": "系统重启下线"}
         items = []
         for row in rows:
             reason = row.get("end_reason") or ""

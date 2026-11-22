@@ -91,10 +91,11 @@ router.beforeEach(async(to, from, next) => {
       const target = to.path === '/404' && to.redirectedFrom ? to.redirectedFrom : to.path
       let loginUrl = `/login?redirect=${encodeURIComponent(target)}`
       try {
-        // 被其他设备顶下线时写入的标记，带到登录页用于提示原因
-        if (sessionStorage.getItem('session_expired') === '1') {
+        // 会话失效原因（系统重启 / 被顶下线等），带到登录页用于提示
+        const expired = sessionStorage.getItem('session_expired')
+        if (expired) {
           sessionStorage.removeItem('session_expired')
-          loginUrl += '&expired=1'
+          loginUrl += `&expired=${encodeURIComponent(expired)}`
         }
       } catch (e) { /* 隐私模式下 sessionStorage 可能不可用，忽略 */ }
       next(loginUrl)
