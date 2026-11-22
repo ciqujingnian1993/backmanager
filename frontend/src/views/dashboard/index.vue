@@ -443,15 +443,19 @@ export default {
         {
           label: '本月利润',
           span: 8,
-          // 只算本月办结的订单：在途订单的钱还没赚到，不进本月利润
+          // 本月完成订单金额 − 本月订单成本 − 本月经营成本；在途订单不计入
           value: '￥' + this.money(kpi.month_profit_done),
           tone: 'month',
-          foot: '本月完成 ￥' + this.money(kpi.month_revenue_done) +
-            ' · 订单成本+经营成本 ￥' + this.money(kpi.month_order_cost_done + kpi.month_extra_cost),
-          tip: '本月办结订单收入 ￥' + this.money(kpi.month_revenue_done) +
-            ' − 已完成订单成本 ￥' + this.money(kpi.month_order_cost_done) +
-            ' − 经营成本（非订单支出）￥' + this.money(kpi.month_extra_cost) +
-            '；经营成本是所有不是订单产生的支出，订单哪个月完成就算哪个月的收入，本月在途订单（' + kpi.count_doing + ' 单）不计入',
+          // 与总收入 / 净利润 / 总支出一致：结果后面列出公式，注明每个数字怎么来的
+          formula: '本月完成订单金额 ￥' + this.money(kpi.month_revenue_done) +
+            '\n− 本月订单成本 ￥' + this.money(kpi.month_order_cost_done) +
+            '\n− 本月经营成本 ￥' + this.money(kpi.month_extra_cost),
+          foot: '本月完成 − 本月订单成本 − 本月经营成本',
+          tip: '本月利润（仅本月办结订单）￥' + this.money(kpi.month_profit_done) +
+            ' = 本月完成订单金额（本月办结订单的收入，订单哪个月完成就算哪个月）￥' + this.money(kpi.month_revenue_done) +
+            ' − 本月订单成本（这些本月办结订单的办理成本）￥' + this.money(kpi.month_order_cost_done) +
+            ' − 本月经营成本（本月发生的非订单支出，按支出发生月归集）￥' + this.money(kpi.month_extra_cost) +
+            '；本月在途订单（' + kpi.count_doing + ' 单）还没办结，收入与成本都不计入；退单成本只在总收入/总支出里列示，不计入本月利润',
           to: orderPath ? { path: orderPath, query: { month: currentMonth || 'all' }} : null
         }
       ]

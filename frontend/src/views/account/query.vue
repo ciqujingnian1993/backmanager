@@ -136,6 +136,11 @@
       <el-table-column label="收入" width="82" align="center">
         <template slot-scope="{ row }">{{ amount(row.revenue) }}</template>
       </el-table-column>
+      <el-table-column label="成本" width="82" align="center">
+        <template slot-scope="{ row }">
+          <span class="cost-cell">{{ amount(row.cost) }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="状态" width="80" align="center">
         <template slot-scope="{ row }">
           <el-tag :type="statusType(row.status)" size="mini">
@@ -408,5 +413,12 @@ export default {
   font-family: Menlo, Consolas, monospace;
   font-size: 12px;
   color: #606266;
+}
+
+// 成本列：橙棕色等宽字体，与收入区分
+.cost-cell {
+  font-family: Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #b88230;
 }
 </style>
