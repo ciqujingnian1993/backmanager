@@ -31,7 +31,7 @@ ARTICLE_FIELDS = [
 ]
 
 ACCOUNT_FIELDS = [
-    "timestamp", "biz_date", "category", "client", "phone", "platform", "items", "unit_price", "quantity",
+    "timestamp", "biz_date", "category", "client", "phone", "wechat", "platform", "items", "unit_price", "quantity",
     "revenue", "cost", "profit", "status", "remark", "creator", "platform_order_no",
     "license_name", "credit_code", "legal_person", "legal_id",
     "id_photos",
@@ -674,6 +674,7 @@ def account_out(row, details=None):
         "category": row["category"] or "",
         "client": row["client"] or "",
         "phone": row.get("phone") or "",
+        "wechat": row.get("wechat") or "",
         "items": row["items"] or "",
         "unit_price": None if row["unit_price"] is None else float(row["unit_price"]),
         "quantity": None if row["quantity"] is None else float(row["quantity"]),
@@ -1367,6 +1368,10 @@ def init_db():
         """,
         """
         ALTER TABLE account_items ADD COLUMN IF NOT EXISTS license_photos jsonb DEFAULT '[]'::jsonb
+        """,
+        # 客户微信：订单层面的联系方式，录入/编辑/详情都能看到，也支持按微信号搜索
+        """
+        ALTER TABLE account_records ADD COLUMN IF NOT EXISTS wechat text DEFAULT ''
         """,
         # 行业叫法统一：「同行业」→「同行」，老订单一起改名，报表按行业分组才不会裂成两类
         """
@@ -2641,13 +2646,13 @@ class App(BaseHTTPRequestHandler):
             keyword = "%" + query["keyword"] + "%"
             where.append(
                 "(a.client ILIKE %s OR a.items ILIKE %s OR a.category ILIKE %s OR a.remark ILIKE %s"
-                " OR a.phone ILIKE %s OR a.order_no ILIKE %s OR a.platform_order_no ILIKE %s"
+                " OR a.phone ILIKE %s OR a.wechat ILIKE %s OR a.order_no ILIKE %s OR a.platform_order_no ILIKE %s"
                 " OR EXISTS (SELECT 1 FROM account_items i WHERE i.account_id = a.id"
                 " AND i.is_delete = 0 AND ("
                 " i.license_name ILIKE %s OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s"
                 " OR i.legal_phone ILIKE %s OR i.items ILIKE %s)))"
             )
-            params.extend([keyword] * 12)
+            params.extend([keyword] * 13)
         if query.get("status"):
             where.append("a.status = %s")
             params.append(query["status"])
@@ -2780,6 +2785,7 @@ class App(BaseHTTPRequestHandler):
             "category": pick("category"),
             "client": pick("client"),
             "phone": (pick("phone") or "").strip(),
+            "wechat": (pick("wechat") or "").strip(),
             "platform": pick("platform"),
             "items": (first.get("items") or "").strip() or pick("items", ""),
             "unit_price": None,
@@ -3541,12 +3547,12 @@ class App(BaseHTTPRequestHandler):
         keyword = (query.get("keyword") or "").strip()
         if keyword:
             where.append(
-                "(a.client ILIKE %s OR a.phone ILIKE %s OR a.order_no ILIKE %s"
+                "(a.client ILIKE %s OR a.phone ILIKE %s OR a.wechat ILIKE %s OR a.order_no ILIKE %s"
                 " OR a.platform_order_no ILIKE %s"
                 " OR i.items ILIKE %s OR i.license_name ILIKE %s"
                 " OR i.credit_code ILIKE %s OR i.legal_person ILIKE %s OR i.legal_phone ILIKE %s)"
             )
-            params.extend(["%" + keyword + "%"] * 9)
+            params.extend(["%" + keyword + "%"] * 10)
         if query.get("status"):
             where.append("i.status = %s")
             params.append(query["status"])
@@ -3574,7 +3580,7 @@ class App(BaseHTTPRequestHandler):
         page = max(int(query.get("page") or 1), 1)
         limit = min(max(int(query.get("limit") or 20), 1), 200)
         sql = """
-            SELECT i.*, a.client, a.phone, a.biz_date, a.category, a.platform,
+            SELECT i.*, a.client, a.phone, a.wechat, a.biz_date, a.category, a.platform,
                    a.order_no, a.status AS account_status,
                    p.step AS last_step,
                    p.status AS last_status,
@@ -3629,6 +3635,7 @@ class App(BaseHTTPRequestHandler):
                     record.update({
                         "client": row["client"] or "",
                         "phone": row["phone"] or "",
+                        "wechat": row.get("wechat") or "",
                         "order_no": row.get("order_no") or "",
                         "biz_date": row["biz_date"] or "",
                         "category": row["category"] or "",

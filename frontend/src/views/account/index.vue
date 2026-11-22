@@ -53,7 +53,7 @@
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
-        placeholder="搜索订单编号 / 客户 / 手机号 / 执照 / 法人"
+        placeholder="搜索订单编号 / 客户 / 手机号 / 微信 / 执照 / 法人"
         clearable
         @keyup.enter.native="handleFilter"
       />
@@ -137,6 +137,12 @@
         <el-table-column label="手机号" width="116">
           <template slot-scope="{ row }">
             <span v-if="row.phone">{{ row.phone }}</span>
+            <span v-else class="muted-text">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="客户微信" min-width="120" show-overflow-tooltip>
+          <template slot-scope="{ row }">
+            <span v-if="row.wechat">{{ row.wechat }}</span>
             <span v-else class="muted-text">—</span>
           </template>
         </el-table-column>
@@ -263,6 +269,24 @@
             </el-form-item>
           </el-col>
         </el-row>
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="客户微信" prop="wechat">
+              <el-input v-model="form.wechat" maxlength="64" clearable placeholder="客户的微信号，可不填" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="平台订单编号">
+              <el-input
+                v-model="form.platform_order_no"
+                class="platform-order-no-input"
+                maxlength="64"
+                clearable
+                placeholder="平台后台的订单号，可不填"
+              />
+            </el-form-item>
+          </el-col>
+        </el-row>
         <el-form-item label="备注">
           <el-input
             v-model="form.remark"
@@ -277,19 +301,6 @@
             <span class="photo-tip">客户身份证正反面，可传多张，编辑订单时可补传</span>
           </div>
         </el-form-item>
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="平台订单编号">
-              <el-input
-                v-model="form.platform_order_no"
-                class="platform-order-no-input"
-                maxlength="64"
-                clearable
-                placeholder="平台后台的订单号，可不填"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
 
         <div class="form-section-title">
           执照明细与任务
@@ -1263,6 +1274,7 @@ export default {
         category: '',
         client: '',
         phone: '',
+        wechat: '',
         platform: '',
         remark: '',
         // 客户身份证照片 [{url, name, size}]
@@ -1367,6 +1379,7 @@ export default {
         category: row.category,
         client: row.client,
         phone: row.phone,
+        wechat: row.wechat || '',
         platform: row.platform,
         remark: row.remark,
         id_photos: Array.isArray(row.id_photos) ? row.id_photos : [],
@@ -1518,6 +1531,7 @@ export default {
           category: this.form.category,
           client: this.form.client,
           phone: this.form.phone || '',
+          wechat: (this.form.wechat || '').trim(),
           platform: this.form.platform || '',
           platform_order_no: (this.form.platform_order_no || '').trim(),
           remark: this.form.remark,

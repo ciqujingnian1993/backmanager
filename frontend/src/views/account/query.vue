@@ -31,7 +31,7 @@
       <el-input
         v-model="listQuery.keyword"
         class="filter-item keyword-input"
-        placeholder="搜索订单编号 / 客户 / 手机号 / 执照 / 法人"
+        placeholder="搜索订单编号 / 客户 / 手机号 / 微信 / 执照 / 法人"
         clearable
         @keyup.enter.native="handleFilter"
       />
@@ -110,6 +110,12 @@
       <el-table-column label="手机号" width="116">
         <template slot-scope="{ row }">
           <span v-if="row.phone">{{ row.phone }}</span>
+          <span v-else class="muted-text">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="客户微信" min-width="120" show-overflow-tooltip>
+        <template slot-scope="{ row }">
+          <span v-if="row.wechat">{{ row.wechat }}</span>
           <span v-else class="muted-text">—</span>
         </template>
       </el-table-column>

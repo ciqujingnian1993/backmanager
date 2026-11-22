@@ -195,6 +195,7 @@ export default {
         { label: '行业', value: row.category || '—' },
         { label: '客户', value: row.client || '—' },
         { label: '手机号', value: row.phone || '—' },
+        { label: '客户微信', value: row.wechat || '—' },
         { label: '来源平台', value: row.platform || '—' },
         { label: '状态', value: orderStatusText(row.status) },
         { label: '收入', value: this.money(row.revenue) },
