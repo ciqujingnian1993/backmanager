@@ -2680,26 +2680,28 @@ class App(BaseHTTPRequestHandler):
                 " AND i.is_delete = 0 AND i.tax_status = %s)"
             )
             params.append(query["tax_status"])
-        if query.get("month"):
-            # biz_date 存 "MM/dd"（历史上有 "YYYY-MM-dd"），两种写法都按月份前缀匹配
-            month = str(query["month"]).split("-")[-1].strip()
-            where.append("(a.biz_date LIKE %s OR a.biz_date LIKE %s)")
-            params.extend([month + "/%", "%-" + month + "-%"])
-        sql = "SELECT * FROM account_records a"
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY a.id DESC"
         page = max(int(query.get("page") or 1), 1)
         limit = min(max(int(query.get("limit") or 20), 1), 200)
+        month_key = str(query.get("month") or "").strip()
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT COUNT(*) AS total FROM account_records a"
-                    + (" WHERE " + " AND ".join(where) if where else ""),
-                    params,
-                )
+                if month_key:
+                    # 月份筛选改为按「完成月」归纳，与首页卡片口径（ms_month_key）完全一致：
+                    # 不再用 biz_date（下单月），否则 9/10 月下单、11 月办结的订单在 11 月筛不到
+                    cur.execute(
+                        "SELECT id, completed_at FROM account_records"
+                        " WHERE is_delete = 0 AND completed_at IS NOT NULL"
+                    )
+                    match_ids = [int(r["id"]) for r in cur.fetchall() if ms_month_key(r["completed_at"]) == month_key]
+                    where.append("a.id = ANY(%s)")
+                    params.append(match_ids)
+                condition = " WHERE " + " AND ".join(where) if where else ""
+                cur.execute("SELECT COUNT(*) AS total FROM account_records a" + condition, params)
                 total = cur.fetchone()["total"]
-                cur.execute(sql + " LIMIT %s OFFSET %s", params + [limit, (page - 1) * limit])
+                cur.execute(
+                    "SELECT * FROM account_records a" + condition + " ORDER BY a.id DESC LIMIT %s OFFSET %s",
+                    params + [limit, (page - 1) * limit],
+                )
                 rows = cur.fetchall()
                 grouped = fetch_details(cur, [row["id"] for row in rows])
                 items = [account_out(row, grouped.get(row["id"], [])) for row in rows]
@@ -2722,13 +2724,24 @@ class App(BaseHTTPRequestHandler):
     def account_summary(self, query=None):
         where = ["is_delete = 0"]
         params = []
-        if query and query.get("month"):
-            month = str(query["month"]).split("-")[-1].strip()
-            where.append("(biz_date LIKE %s OR biz_date LIKE %s)")
-            params = [month + "/%", "%-" + month + "-%"]
-        where_sql = " WHERE " + " AND ".join(where)
+        # 顶部汇总卡的月份筛选与列表、首页卡片统一按「完成月」（ms_month_key）归集
+        month_key = str((query or {}).get("month") or "").strip()
+        match_ids = None
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if month_key:
+                    # 按完成月找出匹配的订单 id（与 ms_month_key / 订单列表口径完全一致）
+                    cur.execute(
+                        "SELECT id, completed_at FROM account_records"
+                        " WHERE is_delete = 0 AND completed_at IS NOT NULL"
+                    )
+                    match_ids = [int(r["id"]) for r in cur.fetchall() if ms_month_key(r["completed_at"]) == month_key]
+                    if match_ids:
+                        where.append("id = ANY(%s)")
+                        params.append(match_ids)
+                    else:
+                        where.append("1 = 0")
+                where_sql = " WHERE " + " AND ".join(where)
                 cur.execute(
                     """
                     SELECT COUNT(*) AS count,

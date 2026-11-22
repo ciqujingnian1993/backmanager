@@ -1549,7 +1549,7 @@ export default {
           : createAccount(payload)
         this.saving = true
         request
-          .then(() => {
+          .then((res) => {
             this.$message({
               message: this.dialogType === 'edit'
                 ? '保存成功'
@@ -1557,13 +1557,16 @@ export default {
               type: 'success'
             })
             this.dialogVisible = false
-            // 记录月份和当前筛选不一致时，自动切到该记录所在月份，
-            // 避免「明明保存成功，列表里却看不到」
-            const target = this.dateMonth(this.form.biz_date)
-            if (target && this.listQuery.month && target !== this.listQuery.month) {
-              this.listQuery.month = target
+            // 筛选已改为按「完成月」（与首页卡片一致）：办结的订单记到完成月，
+            // 未办结的订单没有完成月、不参与任何月份筛选，就不跳转，避免保存后反而看不到
+            const saved = res && res.data
+            const doneMonth = saved && saved.completed_at
+              ? this.completedMonth(saved.completed_at)
+              : ''
+            if (doneMonth && this.listQuery.month && doneMonth !== this.listQuery.month) {
+              this.listQuery.month = doneMonth
               this.$message({
-                message: `该订单属于 ${target}，已自动切换到该月份`,
+                message: `该订单于 ${doneMonth} 办结，已自动切换到该月份`,
                 type: 'info',
                 duration: 4000
               })
@@ -1614,6 +1617,16 @@ export default {
       const date = new Date(Number(stamp))
       const pad = v => String(v).padStart(2, '0')
       return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+    },
+    // 完成月（毫秒时间戳 → YYYY-MM），与后端 ms_month_key / 首页卡片口径一致
+    // 后端服务器时区为 UTC，这里也按 UTC 归月，避免月初月末 8 小时边界与卡片错位
+    completedMonth(stamp) {
+      const value = Number(stamp)
+      if (!value || value <= 0) return ''
+      const date = new Date(value > 1e11 ? value : value * 1000)
+      if (Number.isNaN(date.getTime())) return ''
+      const pad = v => String(v).padStart(2, '0')
+      return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}`
     },
     statusType(status) {
       return orderStatusType(status)
