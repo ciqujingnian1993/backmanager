@@ -351,20 +351,23 @@ export default {
       const allOrders = orderPath ? { path: orderPath, query: { month: 'all' }} : null
       // 总收入只统计已完成订单，穿透过去也要只看已完成，才能和卡片上的数字对上
       const doneOrders = orderPath ? { path: orderPath, query: { month: 'all', status: 'done' }} : null
+      // 总收入口径：已完成订单收入 − 已完成订单成本 − 退单成本（退款给客户的钱）
+      const netRevenue = Number(kpi.revenue_done) - Number(kpi.order_cost_done) - Number(kpi.refund_cost)
       return [
         {
           label: '总收入',
-          // 主数值就是扣除订单成本后的收入：订单总额（已完成收入）− 已完成订单成本
-          value: '￥' + this.money(Number(kpi.revenue_done) - Number(kpi.order_cost_done)),
-          tone: Number(kpi.revenue_done) - Number(kpi.order_cost_done) < 0 ? 'warn' : 'revenue',
+          // 主数值 = 订单总额（已完成收入）− 已完成订单成本 − 退单成本
+          value: '￥' + this.money(netRevenue),
+          tone: netRevenue < 0 ? 'warn' : 'revenue',
           // 结果后面给出公式，并注明每个数字是怎么来的
           formula: '订单总额 ￥' + this.money(kpi.revenue_done) +
-            '\n− 订单成本 ￥' + this.money(kpi.order_cost_done),
-          tip: '总收入（扣除订单成本后）￥' +
-            this.money(Number(kpi.revenue_done) - Number(kpi.order_cost_done)) +
+            '\n− 订单成本 ￥' + this.money(kpi.order_cost_done) +
+            '\n− 退单成本 ￥' + this.money(kpi.refund_cost),
+          tip: '总收入（扣除订单成本与退单成本后）￥' + this.money(netRevenue) +
             ' = 订单总额（已完成订单收入）￥' + this.money(kpi.revenue_done) +
             ' − 已完成订单成本 ￥' + this.money(kpi.order_cost_done) +
-            '；净利润还要再扣经营成本（所有非订单支出）￥' + this.money(kpi.extra_cost),
+            ' − 退单成本（退款给客户的钱）￥' + this.money(kpi.refund_cost) +
+            '；净利润 = 总收入 − 经营成本（所有非订单支出）￥' + this.money(kpi.extra_cost),
           // 哪个月完成就算哪个月的收入：本月口径 = 本月办结订单的收入
           foot: '已完成 ' + kpi.count_done + ' 单 · 本月完成 ￥' + this.money(kpi.month_revenue_done),
           growth: kpi.month_done_growth,
@@ -390,15 +393,15 @@ export default {
           label: '净利润',
           value: '￥' + this.money(kpi.profit_done),
           tone: 'profit',
-          // 净利润 = 总收入（已扣订单成本）− 经营成本（所有不是订单产生的支出）
-          formula: '总收入 ￥' + this.money(Number(kpi.revenue_done) - Number(kpi.order_cost_done)) +
+          // 净利润 = 总收入（已扣订单成本与退单成本）− 经营成本（所有不是订单产生的支出）
+          formula: '总收入 ￥' + this.money(netRevenue) +
             '\n− 经营成本 ￥' + this.money(kpi.extra_cost),
           foot: '总收入 − 经营成本（非订单支出）',
           tip: '净利润（已完成口径）￥' + this.money(kpi.profit_done) +
-            ' = 总收入（扣除订单成本后）￥' + this.money(Number(kpi.revenue_done) - Number(kpi.order_cost_done)) +
+            ' = 总收入（已扣订单成本与退单成本）￥' + this.money(netRevenue) +
             ' − 经营成本 ￥' + this.money(kpi.extra_cost) +
             '；经营成本指所有不是订单产生的支出（房租、水电、推广、办公、人工等，成本记录里除退款外的全部支出），' +
-            '订单成本已在总收入里扣过一次，这里不重复扣；在途订单还没办结，不计入净利润',
+            '订单成本与退单成本都已在总收入里扣过，这里不重复扣；在途订单还没办结，不计入净利润',
           to: doneOrders
         },
         {
@@ -416,7 +419,8 @@ export default {
             ' + 退单成本 ￥' + this.money(kpi.refund_cost) +
             '；经营成本是所有非订单产生的支出，订单成本是各订单上填的办理成本（含在途），' +
             '退单成本是取消/退款时退给客户的钱（退款单自动生成）。' +
-            '退单成本已在订单收入里冲减过，不重复计入净利润；净利润只按「总收入 − 经营成本」算，两者口径不同',
+            '退单成本在「总收入」里作收入抵减、在「总支出」里作现金流出，两个视角各列一次；' +
+            '净利润按「总收入 − 经营成本」算，已包含这笔退单损失',
           to: this.targets.cost ? { path: this.targets.cost, query: { month: 'all' }} : null
         },
         {

@@ -4801,8 +4801,8 @@ class App(BaseHTTPRequestHandler):
         cost_by_category = {}
         for row in costs:
             amount = float(row["amount"] or 0)
-            # 退单成本（取消/退款时退给客户的钱）是真实现金流出，但金额已在订单收入里冲减，
-            # 所以不参与利润计算，只单独归集给首页「总支出」展示
+            # 退单成本（取消/退款时退给客户的钱）既是现金流出也是收入抵减：
+            # 不进经营成本、不进月度趋势，单独归集给首页总收入 / 总支出 / 净利润
             if (row.get("kind") or "") == "refund":
                 refund_cost_total += amount
                 continue
@@ -4825,7 +4825,9 @@ class App(BaseHTTPRequestHandler):
         profit_total = revenue_total - total_cost
         # 首页「总收入 / 净利润」按已完成订单口径：执照任务没全部办结的订单，
         # 钱还没赚到，收入不进总收入，成本也不参与毛利
-        profit_done = revenue_done - order_cost_done - extra_cost_total
+        # 被退的订单不计入 revenue_done，它的收入冲减也不影响已完成订单口径，
+        # 所以退单成本要在这里单独扣一次，否则退款损失会漏在净利润之外
+        profit_done = revenue_done - order_cost_done - extra_cost_total - refund_cost_total
         # 和净利润对得上的支出：已完成订单成本 + 经营成本（在途订单成本单独摆出来，免得对不上账）
         total_cost_done = order_cost_done + extra_cost_total
         order_cost_open = order_cost_total - order_cost_done
