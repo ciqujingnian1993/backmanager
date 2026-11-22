@@ -424,7 +424,7 @@ export default {
             '；经营成本是所有非订单产生的支出，订单成本是各订单上填的办理成本（含在途），' +
             '退单成本是取消/退款时退给客户的钱（退款单自动生成）。' +
             '退单成本在「总收入」里作收入抵减、在「总支出」里作现金流出，两个视角各列一次；' +
-            '净利润按「总收入 − 经营成本」算，已包含这笔退单损失；本月利润另外按取消月扣本月退单损失',
+            '净利润按「总收入 − 经营成本」算，已包含这笔退单损失；本月利润另按支出记录的发生月扣本月退单成本',
           to: this.targets.cost ? { path: this.targets.cost, query: { month: 'all' }} : null
         },
         {
@@ -444,7 +444,7 @@ export default {
             ' = 本月完成订单金额（本月办结订单的收入，订单哪个月完成就算哪个月）￥' + this.money(kpi.month_revenue_done) +
             ' − 本月订单成本（这些本月办结订单的办理成本）￥' + this.money(kpi.month_order_cost_done) +
             ' − 本月经营成本（本月发生的非订单支出，按支出发生月归集）￥' + this.money(kpi.month_extra_cost) +
-            ' − 本月退单成本（订单哪个月取消/退款，就算哪个月）￥' + this.money(kpi.month_refund_cost) +
+            ' − 本月退单成本（支出管理里的退款记录，按发生月归集）￥' + this.money(kpi.month_refund_cost) +
             '；本月在途订单（' + kpi.count_doing + ' 单）还没办结，收入与成本都不计入',
           to: orderPath ? { path: orderPath, query: { month: currentMonth || 'all' }} : null
         },

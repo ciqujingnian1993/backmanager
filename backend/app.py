@@ -4751,12 +4751,6 @@ class App(BaseHTTPRequestHandler):
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SELECT * FROM account_records WHERE is_delete = 0 ORDER BY id DESC")
                 accounts = cur.fetchall()
-                # 本月退单成本按订单实际退款明细归月：订单哪个月取消/退款，这笔损失算哪个月
-                cur.execute(
-                    "SELECT account_id, refund_amount, refund_at, cancelled_at, completed_at"
-                    " FROM account_items WHERE is_delete = 0 AND COALESCE(refund_amount, 0) <> 0"
-                )
-                refund_items = cur.fetchall()
                 cur.execute("SELECT * FROM cost_records WHERE is_delete = 0")
                 costs = cur.fetchall()
                 cur.execute(
@@ -4776,20 +4770,6 @@ class App(BaseHTTPRequestHandler):
 
         months = [shift_month(now, offset).strftime("%Y-%m") for offset in range(-5, 1)]
         trend = {key: {"revenue": 0.0, "cost": 0.0, "profit": 0.0, "orders": 0} for key in months}
-        account_by_id = {int(row["id"]): row for row in accounts}
-        # 退单成本归到取消/退款发生的那个月（UTC，与收入完成月口径一致）
-        for row in refund_items:
-            amount = float(row["refund_amount"] or 0)
-            month = ms_month_key(row.get("refund_at")) or ms_month_key(row.get("cancelled_at"))
-            if not month:
-                order = account_by_id.get(int(row["account_id"] or 0))
-                if order:
-                    month = ms_month_key(order.get("completed_at")) or biz_month_key(
-                        order.get("biz_date"), order.get("created_at")
-                    )
-            if month in trend:
-                trend[month]["refund_cost"] = trend[month].get("refund_cost", 0.0) + amount
-
         revenue_total = 0.0
         order_cost_total = 0.0
         # 收入按订单状态拆开：已完成才是真收入，进行中算在途，待定单独看
@@ -4855,9 +4835,12 @@ class App(BaseHTTPRequestHandler):
         for row in costs:
             amount = float(row["amount"] or 0)
             # 退单成本（取消/退款时退给客户的钱）既是现金流出也是收入抵减：
-            # 不进经营成本、不进月度趋势，单独归集给首页总收入 / 总支出 / 净利润
+            # 不进经营成本，单独归集给首页总收入 / 总支出 / 净利润，以及本月利润
             if (row.get("kind") or "") == "refund":
                 refund_cost_total += amount
+                month = biz_month_key(row["biz_date"], row.get("created_at"))
+                if month in trend:
+                    trend[month]["refund_cost"] = trend[month].get("refund_cost", 0.0) + amount
                 continue
             extra_cost_total += amount
             month = biz_month_key(row["biz_date"], row.get("created_at"))
@@ -4898,7 +4881,7 @@ class App(BaseHTTPRequestHandler):
         )
         month_cost = trend[current]["cost"]
         # 本月「已完成口径」毛利：只算已办结订单的收入与成本，经营成本全算，
-        # 再减去本月取消/退款订单的退单成本（按取消月归集，不按下单月）
+        # 再减去本月退单成本（取支出管理里的退款记录，按发生月归集，与总收入/总支出同口径）
         month_refund_cost = trend[current].get("refund_cost", 0.0)
         month_profit_done = (
             month_done_revenue
@@ -5000,7 +4983,7 @@ class App(BaseHTTPRequestHandler):
                     "extra_cost": money(extra_cost_total),
                     # 退单成本：首页总收入 / 净利润 / 总支出用支出管理里的退款记录金额
                     "refund_cost": money(refund_cost_total),
-                    # 本月退单成本：按订单取消/退款时间归月，单独给「本月利润」扣减
+                    # 本月退单成本：支出管理里的退款记录按发生月归集，单独给「本月利润」扣减
                     "month_refund_cost": money(month_refund_cost),
                     "total_cost": money(total_cost),
                     # 首页「总支出」用这个：经营成本 + 订单成本 + 退单成本
