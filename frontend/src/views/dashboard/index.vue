@@ -8,7 +8,13 @@
             <span class="stat-label">{{ card.label }}</span>
             <i v-if="card.to" class="el-icon-arrow-right stat-go" />
           </div>
-          <div class="stat-value" :class="card.tone">{{ card.value }}</div>
+          <div class="stat-value" :class="card.tone">
+            <span class="stat-main">{{ card.value }}</span>
+            <span v-if="card.net" class="stat-net">
+              <span class="net-minus">− {{ card.net.cost }}</span>
+              <span class="net-result" :class="{ 'is-negative': card.net.negative }">= {{ card.net.value }}</span>
+            </span>
+          </div>
           <div class="stat-foot">
             <span v-if="card.growth !== null && card.growth !== undefined" :class="card.growth >= 0 ? 'up' : 'down'">
               {{ card.growth >= 0 ? '↑' : '↓' }}{{ Math.abs(card.growth) }}%
@@ -350,6 +356,16 @@ export default {
           label: '总收入',
           value: '￥' + this.money(kpi.revenue_done),
           tone: 'revenue',
+          // 订单总额 − 已完成订单成本 = 扣除订单成本后的收入，紧跟在总收入右边展示
+          net: {
+            cost: '￥' + this.money(kpi.order_cost_done),
+            value: '￥' + this.money(Number(kpi.revenue_done) - Number(kpi.order_cost_done)),
+            negative: Number(kpi.revenue_done) - Number(kpi.order_cost_done) < 0
+          },
+          tip: '订单总额（已完成订单收入）￥' + this.money(kpi.revenue_done) +
+            ' − 已完成订单成本 ￥' + this.money(kpi.order_cost_done) +
+            ' = 扣除订单成本后的收入 ￥' + this.money(Number(kpi.revenue_done) - Number(kpi.order_cost_done)) +
+            '；净利润还要再扣其他支出 ￥' + this.money(kpi.extra_cost),
           // 哪个月完成就算哪个月的收入：本月口径 = 本月办结订单的收入
           foot: '已完成 ' + kpi.count_done + ' 单 · 本月完成 ￥' + this.money(kpi.month_revenue_done),
           growth: kpi.month_done_growth,
@@ -795,11 +811,30 @@ export default {
   }
 
   .stat-value {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-top: 6px;
     font-size: 22px;
     font-weight: 600;
     line-height: 1.2;
     white-space: nowrap;
+
+    .stat-main { flex: none; }
+
+    // 总收入右边：订单总额 − 订单成本 = 扣除订单成本后的收入
+    .stat-net {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 5px;
+      font-size: 13px;
+      font-weight: 500;
+
+      .net-minus { color: #909399; }
+      .net-result { color: #67c23a; font-weight: 600; }
+      .net-result.is-negative { color: #f56c6c; }
+    }
 
     &.revenue { color: #409eff; }
     &.doing { color: #0f9d8f; }
