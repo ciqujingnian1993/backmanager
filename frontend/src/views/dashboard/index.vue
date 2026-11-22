@@ -355,20 +355,26 @@ export default {
       const doneOrders = orderPath ? { path: orderPath, query: { month: 'all', status: 'done' }} : null
       // 总收入口径：已完成订单收入 − 已完成订单成本 − 退单成本（退款给客户的钱）
       const netRevenue = Number(kpi.revenue_done) - Number(kpi.order_cost_done) - Number(kpi.refund_cost)
+      // 净利润把四项一次列全：订单总额 − 订单成本 − 退单成本 − 经营成本，与后端 profit_done 完全一致，不重复扣退单成本
+      const netProfit = netRevenue - Number(kpi.extra_cost)
       return [
         {
           label: '净利润',
-          value: '￥' + this.money(kpi.profit_done),
+          value: '￥' + this.money(netProfit),
           tone: 'profit',
-          // 净利润 = 总收入（已扣订单成本与退单成本）− 经营成本（所有不是订单产生的支出）
-          formula: '总收入 ￥' + this.money(netRevenue) +
+          // 净利润 = 订单总额 − 订单成本 − 退单成本 − 经营成本（退单成本在这里显式扣一次）
+          formula: '订单总额 ￥' + this.money(kpi.revenue_done) +
+            '\n− 订单成本 ￥' + this.money(kpi.order_cost_done) +
+            '\n− 退单成本 ￥' + this.money(kpi.refund_cost) +
             '\n− 经营成本 ￥' + this.money(kpi.extra_cost),
-          foot: '总收入 − 经营成本（非订单支出）',
-          tip: '净利润（已完成口径）￥' + this.money(kpi.profit_done) +
-            ' = 总收入（已扣订单成本与退单成本）￥' + this.money(netRevenue) +
+          foot: '订单收入 − 订单成本 − 退单成本 − 经营成本',
+          tip: '净利润（已完成口径）￥' + this.money(netProfit) +
+            ' = 订单总额（已完成订单收入）￥' + this.money(kpi.revenue_done) +
+            ' − 已完成订单成本 ￥' + this.money(kpi.order_cost_done) +
+            ' − 退单成本（退款给客户的钱）￥' + this.money(kpi.refund_cost) +
             ' − 经营成本 ￥' + this.money(kpi.extra_cost) +
             '；经营成本指所有不是订单产生的支出（房租、水电、推广、办公、人工等，成本记录里除退款外的全部支出），' +
-            '订单成本与退单成本都已在总收入里扣过，这里不重复扣；在途订单还没办结，不计入净利润',
+            '退单成本已在「总收入」卡里抵减一次，这里按原始项完整列出、不重复扣；在途订单还没办结，不计入净利润',
           to: doneOrders
         },
         {
@@ -795,9 +801,9 @@ export default {
     border-radius: 6px;
     padding: 14px 16px;
     margin-bottom: 16px;
-    // 「总收入 / 在途收入金额 / 总支出」三张卡带公式，总支出是三行；统一最小高度保证 7 张卡同行等高
+    // 「总收入 / 净利润 / 在途收入金额 / 总支出」带公式，净利润是四行；统一最小高度保证 7 张卡同行等高
     box-sizing: border-box;
-    min-height: 160px;
+    min-height: 180px;
     box-shadow: 0 1px 6px rgba(0, 21, 255, 0.06);
     border-left: 3px solid #dcdfe6;
     transition: box-shadow 0.2s, transform 0.2s;
