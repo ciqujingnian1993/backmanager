@@ -202,6 +202,35 @@ def ms_month_key(stamp):
     return datetime.fromtimestamp(value).strftime("%Y-%m")
 
 
+def account_month_ids(cur, month_key):
+    """订单列表/汇总的月份口径：
+    - 已办结（含取消/退款）：按完成月，与首页卡片、收入归集一致；
+    - 未办结（进行中/待定）：没有完成月，按下单月份 biz_date（MM/DD，年份取创建时间）筛选，
+      否则按完成月筛会把本月进行中的订单全部漏掉。
+    """
+    cur.execute(
+        "SELECT id, completed_at, biz_date, created_at FROM account_records WHERE is_delete = 0"
+    )
+    ids = []
+    for row in cur.fetchall():
+        if row["completed_at"]:
+            matched = ms_month_key(row["completed_at"]) == month_key
+        else:
+            bits = str(row["biz_date"] or "").strip().replace("-", "/").split("/")
+            month = bits[0].zfill(2) if bits and bits[0].isdigit() else ""
+            if not month:
+                month = row["created_at"].strftime("%m") if row["created_at"] else ""
+            year = ""
+            if len(bits) >= 3 and len(bits[2]) == 4 and bits[2].isdigit():
+                year = bits[2]
+            elif row["created_at"]:
+                year = row["created_at"].strftime("%Y")
+            matched = bool(month) and ("%s-%s" % (year, month) == month_key)
+        if matched:
+            ids.append(int(row["id"]))
+    return ids
+
+
 class UploadedFile:
     def __init__(self, filename, data):
         self.filename = filename
@@ -2686,13 +2715,9 @@ class App(BaseHTTPRequestHandler):
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 if month_key:
-                    # 月份筛选改为按「完成月」归纳，与首页卡片口径（ms_month_key）完全一致：
-                    # 不再用 biz_date（下单月），否则 9/10 月下单、11 月办结的订单在 11 月筛不到
-                    cur.execute(
-                        "SELECT id, completed_at FROM account_records"
-                        " WHERE is_delete = 0 AND completed_at IS NOT NULL"
-                    )
-                    match_ids = [int(r["id"]) for r in cur.fetchall() if ms_month_key(r["completed_at"]) == month_key]
+                    # 已办结订单按完成月（与首页卡片一致），未办结订单按下单月，
+                    # 否则选了本月 + 进行中时，进行中的订单因为没有完成月会被全部筛掉
+                    match_ids = account_month_ids(cur, month_key)
                     where.append("a.id = ANY(%s)")
                     params.append(match_ids)
                 condition = " WHERE " + " AND ".join(where) if where else ""
@@ -2730,12 +2755,8 @@ class App(BaseHTTPRequestHandler):
         with connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 if month_key:
-                    # 按完成月找出匹配的订单 id（与 ms_month_key / 订单列表口径完全一致）
-                    cur.execute(
-                        "SELECT id, completed_at FROM account_records"
-                        " WHERE is_delete = 0 AND completed_at IS NOT NULL"
-                    )
-                    match_ids = [int(r["id"]) for r in cur.fetchall() if ms_month_key(r["completed_at"]) == month_key]
+                    # 与列表完全一致：已办结按完成月，未办结按下单月
+                    match_ids = account_month_ids(cur, month_key)
                     if match_ids:
                         where.append("id = ANY(%s)")
                         params.append(match_ids)

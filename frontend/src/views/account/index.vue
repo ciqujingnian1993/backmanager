@@ -1557,8 +1557,8 @@ export default {
               type: 'success'
             })
             this.dialogVisible = false
-            // 筛选已改为按「完成月」（与首页卡片一致）：办结的订单记到完成月，
-            // 未办结的订单没有完成月、不参与任何月份筛选，就不跳转，避免保存后反而看不到
+            // 月份口径：已办结订单按完成月（与首页卡片一致），未办结订单按下单月。
+            // 这里只在办结月份与当前筛选不一致时自动切月份，未办结的保持当前筛选不动。
             const saved = res && res.data
             const doneMonth = saved && saved.completed_at
               ? this.completedMonth(saved.completed_at)
