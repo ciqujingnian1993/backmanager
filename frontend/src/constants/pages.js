@@ -8,6 +8,7 @@ export const PAGE_OPTIONS = [
   { path: '/cost/query', label: '成本查询' },
   { path: '/finance/report', label: '财务报表' },
   { path: '/system/user', label: '用户管理' },
+  { path: '/system/login', label: '登录管理' },
   { path: '/system/role', label: '角色管理' },
   { path: '/system/menu', label: '菜单管理' },
   { path: '/system/platform', label: '平台管理' },

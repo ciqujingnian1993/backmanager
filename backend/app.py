@@ -6,10 +6,12 @@ import re
 import secrets
 import time
 import traceback
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import ip_address
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import psycopg2
 from psycopg2.extras import Json, RealDictCursor
@@ -565,6 +567,102 @@ def menu_out(row):
     }
 
 
+CN_TZ = timezone(timedelta(hours=8))
+
+
+def cn_time(value):
+    """数据库里是 UTC，登录日志统一按北京时间展示。"""
+    if not value:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def request_ip(handler):
+    """优先取 nginx 透传的真实客户端 IP，其次 X-Real-IP，最后退回直连地址。"""
+    forwarded = (handler.headers.get("X-Forwarded-For") or "").split(",")
+    for candidate in forwarded:
+        candidate = candidate.strip()
+        if candidate:
+            return candidate
+    real = (handler.headers.get("X-Real-IP") or "").strip()
+    if real:
+        return real
+    return handler.client_address[0] if handler.client_address else ""
+
+
+def parse_device(ua):
+    """从 User-Agent 里粗分操作系统和浏览器，够管理员看出是哪台设备。"""
+    if not ua:
+        return "未知设备"
+    low = ua.lower()
+    if "windows nt 10" in low:
+        os_name = "Windows 10/11"
+    elif "windows nt 6.3" in low:
+        os_name = "Windows 8.1"
+    elif "windows" in low:
+        os_name = "Windows"
+    elif "android" in low:
+        os_name = "Android"
+    elif "iphone" in low or "ipad" in low:
+        os_name = "iOS"
+    elif "mac os x" in low:
+        os_name = "macOS"
+    elif "linux" in low:
+        os_name = "Linux"
+    else:
+        os_name = "其他设备"
+    if "micromessenger" in low:
+        browser = "微信内置"
+    elif "edg/" in low:
+        browser = "Edge"
+    elif "opr/" in low or "opera" in low:
+        browser = "Opera"
+    elif "chrome/" in low or "crios/" in low:
+        browser = "Chrome"
+    elif "firefox/" in low:
+        browser = "Firefox"
+    elif "safari/" in low:
+        browser = "Safari"
+    else:
+        browser = "浏览器"
+    return os_name + " · " + browser
+
+
+def resolve_ip_location(ip):
+    """公网 IP 查归属地；查不到不阻塞登录，内网 IP 直接标内网。"""
+    if not ip:
+        return "未知"
+    if ip in ("::1", "127.0.0.1"):
+        return "本机"
+    try:
+        parsed = ip_address(ip.split("%")[0])
+        if parsed.is_private or parsed.is_loopback or parsed.is_link_local or parsed.is_reserved:
+            return "内网 IP"
+    except ValueError:
+        pass
+    try:
+        url = (
+            "http://ip-api.com/json/" + quote(ip, safe=":.")
+            + "?lang=zh-CN&fields=status,country,regionName,city,isp"
+        )
+        # 绕过环境代理直连，避免服务器代理配置把查询带到不可达的地址
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url, timeout=1.5) as resp:
+            info = json.loads(resp.read().decode("utf-8", "ignore"))
+        if info.get("status") == "success":
+            parts = [info.get("regionName"), info.get("city"), info.get("country")]
+            label = " · ".join(str(item) for item in parts if item)
+            isp = info.get("isp") or ""
+            if isp:
+                label += ("（" if label else "") + isp + ("）" if label else "")
+            return label or "公网 IP"
+    except Exception:
+        pass
+    return "公网 IP（未解析）"
+
+
 def item_out(row):
     created = row.get("created_at")
     return {
@@ -1092,6 +1190,29 @@ def init_db():
             created_at timestamptz NOT NULL DEFAULT now()
         )
         """,
+        # 登录日志：谁、什么时候、从哪个 IP / 归属地、用什么设备上的系统。
+        # token 用来和 sessions 对账，能看出当前是否在线、是主动退出还是被顶下线。
+        """
+        CREATE TABLE IF NOT EXISTS login_logs (
+            id serial PRIMARY KEY,
+            user_id integer REFERENCES users(id) ON DELETE SET NULL,
+            username text NOT NULL,
+            token text,
+            login_at timestamptz NOT NULL DEFAULT now(),
+            logout_at timestamptz,
+            end_reason text NOT NULL DEFAULT '',
+            ip text NOT NULL DEFAULT '',
+            location text NOT NULL DEFAULT '',
+            user_agent text NOT NULL DEFAULT '',
+            device text NOT NULL DEFAULT ''
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS login_logs_login_at_idx ON login_logs (login_at DESC)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS login_logs_user_idx ON login_logs (username, login_at DESC)
+        """,
         """
         CREATE TABLE IF NOT EXISTS articles (
             id serial PRIMARY KEY,
@@ -1534,6 +1655,7 @@ def init_db():
             sync_account_route(cur)
             ensure_finance_route(cur)
             seed_menus(cur)
+            backfill_login_logs(cur)
             seed_platforms(cur)
             seed_biz_items(cur)
             seed_prices(cur)
@@ -1553,6 +1675,7 @@ MENU_SEED = [
     ("/cost/query", "成本查询", "table", "", 50),
     ("/finance/report", "财务报表", "chart", "", 60),
     ("/system/user", "用户管理", "user", "/system", 110),
+    ("/system/login", "登录管理", "peoples", "/system", 115),
     ("/system/role", "角色管理", "lock", "/system", 120),
     ("/system/menu", "菜单管理", "list", "/system", 130),
     ("/system/platform", "平台管理", "shopping", "/system", 140),
@@ -1959,6 +2082,18 @@ def seed_menus(cur):
         )
 
 
+def backfill_login_logs(cur):
+    """升级上线时把当前还在线的旧会话补进日志，页面不会一上来就是空的。"""
+    cur.execute(
+        """
+        INSERT INTO login_logs (user_id, username, token, login_at, ip, location, device)
+        SELECT s.user_id, u.username, s.token, s.created_at, '', '历史会话（升级前）', '旧会话'
+          FROM sessions s JOIN users u ON u.id = s.user_id
+         WHERE NOT EXISTS (SELECT 1 FROM login_logs l WHERE l.token = s.token)
+        """
+    )
+
+
 def sync_account_route(cur):
     try:
         routes = json.loads(ROUTES_PATH.read_text(encoding="utf-8"))
@@ -2158,6 +2293,8 @@ class App(BaseHTTPRequestHandler):
             self.user_update(body, user)
         elif path == "/vue-element-admin/user/delete" and method == "POST":
             self.user_delete(body, user)
+        elif path == "/vue-element-admin/user/login-log" and method == "GET":
+            self.login_log_list(query, user)
         elif path == "/vue-element-admin/article/list" and method == "GET":
             self.article_list(query)
         elif path == "/vue-element-admin/article/detail" and method == "GET":
@@ -2304,8 +2441,26 @@ class App(BaseHTTPRequestHandler):
                     return
                 token = secrets.token_urlsafe(32)
                 # 单点登录：同一账号只保留最新一次登录的会话，旧设备的 token 立即作废
+                cur.execute(
+                    "UPDATE login_logs SET logout_at = now(), end_reason = 'kicked'"
+                    " WHERE token IN (SELECT token FROM sessions WHERE user_id = %s)"
+                    " AND logout_at IS NULL",
+                    (row["id"],),
+                )
                 cur.execute("DELETE FROM sessions WHERE user_id = %s", (row["id"],))
                 cur.execute("INSERT INTO sessions (token, user_id) VALUES (%s, %s)", (token, row["id"]))
+                # 记录这次登录：时间、来源 IP / 归属地、设备；归属地查询失败也不影响登录
+                ip = request_ip(self)
+                ua = self.headers.get("User-Agent") or ""
+                cur.execute(
+                    """
+                    INSERT INTO login_logs
+                        (user_id, username, token, ip, location, user_agent, device)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (row["id"], row["username"], token, ip,
+                     resolve_ip_location(ip), ua, parse_device(ua)),
+                )
             conn.commit()
             # 登录成功直接带回用户信息与菜单，前端不必再串行请求 user/info、menu/list，
             # 每次往返约一个网络 RTT，省掉这两次能明显缩短登录等待
@@ -2360,6 +2515,11 @@ class App(BaseHTTPRequestHandler):
         if token:
             with connect() as conn:
                 with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE login_logs SET logout_at = now(), end_reason = 'logout'"
+                        " WHERE token = %s AND logout_at IS NULL",
+                        (token,),
+                    )
                     cur.execute("DELETE FROM sessions WHERE token = %s", (token,))
                 conn.commit()
         self.send_json({"code": 20000, "data": "success"})
@@ -2421,6 +2581,109 @@ class App(BaseHTTPRequestHandler):
         self.send_json({
             "code": 20000,
             "data": {"total": total, "items": items, "roles": role_meta or role_options},
+        })
+
+    def login_log_list(self, query, user):
+        """登录管理：谁、什么时候、从哪个 IP / 归属地、用什么设备登录，以及当前是否在线。"""
+        if not self.is_admin(user):
+            self.deny("仅管理员可查看登录记录")
+            return
+        where = []
+        params = []
+        keyword = (query.get("keyword") or "").strip()
+        if keyword:
+            like = "%" + keyword + "%"
+            where.append(
+                "(l.username ILIKE %s OR COALESCE(u.name, '') ILIKE %s"
+                " OR l.ip ILIKE %s OR l.location ILIKE %s OR l.device ILIKE %s)"
+            )
+            params.extend([like] * 5)
+        username = (query.get("username") or "").strip()
+        if username:
+            where.append("l.username = %s")
+            params.append(username)
+        day = (query.get("date") or "").strip()
+        if day:
+            where.append("to_char(l.login_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD') = %s")
+            params.append(day)
+        state = (query.get("state") or "").strip()
+        if state == "online":
+            where.append("s.token IS NOT NULL")
+        elif state == "offline":
+            where.append("s.token IS NULL")
+        condition = (" WHERE " + " AND ".join(where)) if where else ""
+        joins = (
+            " FROM login_logs l"
+            " LEFT JOIN users u ON u.id = l.user_id"
+            " LEFT JOIN sessions s ON s.token = l.token"
+        )
+        page = max(int(query.get("page") or 1), 1)
+        limit = min(max(int(query.get("limit") or 20), 1), 200)
+        with connect() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT COUNT(*)" + joins + condition, params)
+                total = cur.fetchone()["count"]
+                cur.execute(
+                    """
+                    SELECT l.id, l.user_id, l.username, COALESCE(u.name, l.username) AS name,
+                           l.login_at, l.logout_at, l.end_reason, l.ip, l.location,
+                           l.device, l.user_agent, (s.token IS NOT NULL) AS online
+                    """
+                    + joins + condition
+                    + " ORDER BY l.login_at DESC, l.id DESC LIMIT %s OFFSET %s",
+                    params + [limit, (page - 1) * limit],
+                )
+                rows = cur.fetchall()
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FILTER (
+                             WHERE to_char(login_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')
+                                   = to_char(now() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')
+                           ) AS today_logins,
+                           COUNT(DISTINCT username) FILTER (
+                             WHERE to_char(login_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')
+                                   = to_char(now() AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD')
+                           ) AS today_users,
+                           COUNT(*) FILTER (WHERE token IN (SELECT token FROM sessions)) AS online_sessions,
+                           COUNT(DISTINCT user_id) FILTER (
+                             WHERE token IN (SELECT token FROM sessions)
+                           ) AS online_users
+                    FROM login_logs
+                    """
+                )
+                stats = dict(cur.fetchone() or {})
+                cur.execute(
+                    """
+                    SELECT DISTINCT l.username, COALESCE(u.name, l.username) AS name
+                    FROM login_logs l LEFT JOIN users u ON u.id = l.user_id
+                    ORDER BY l.username
+                    """
+                )
+                users = [
+                    {"username": row["username"], "name": row["name"]}
+                    for row in cur.fetchall()
+                ]
+        end_labels = {"logout": "主动退出", "kicked": "被新登录顶下线"}
+        items = []
+        for row in rows:
+            reason = row.get("end_reason") or ""
+            items.append({
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "username": row["username"],
+                "name": row["name"] or row["username"],
+                "login_time": cn_time(row["login_at"]),
+                "logout_time": cn_time(row["logout_at"]),
+                "online": bool(row["online"]),
+                "end_reason": end_labels.get(reason, ""),
+                "ip": row["ip"] or "",
+                "location": row["location"] or "",
+                "device": row["device"] or "",
+                "user_agent": row["user_agent"] or "",
+            })
+        self.send_json({
+            "code": 20000,
+            "data": {"total": total, "items": items, "stats": stats, "users": users},
         })
 
     def user_create(self, body, user):

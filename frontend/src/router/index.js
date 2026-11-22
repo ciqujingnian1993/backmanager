@@ -185,6 +185,12 @@ export const asyncRoutes = [
         meta: { title: '用户管理', icon: 'user', roles: ['admin'] }
       },
       {
+        path: 'login',
+        component: () => import('@/views/system/login'),
+        name: 'LoginLogManage',
+        meta: { title: '登录管理', icon: 'peoples', roles: ['admin'] }
+      },
+      {
         path: 'role',
         component: () => import('@/views/permission/role'),
         name: 'RolePermission',
