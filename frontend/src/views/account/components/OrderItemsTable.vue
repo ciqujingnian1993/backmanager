@@ -1,7 +1,7 @@
 <template>
   <div class="order-items">
     <el-table :data="details" border size="mini" style="width: 100%">
-      <el-table-column label="#" width="42" align="center">
+      <el-table-column label="序号" width="56" align="center">
         <template slot-scope="{ $index }">{{ $index + 1 }}</template>
       </el-table-column>
       <el-table-column prop="license_name" label="执照名称" min-width="170" show-overflow-tooltip>

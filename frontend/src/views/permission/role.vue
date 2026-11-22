@@ -19,6 +19,7 @@
       highlight-current-row
       style="width: 100%"
     >
+      <el-table-column type="index" label="序号" width="60" align="center" />
       <el-table-column label="角色标识" width="130">
         <template slot-scope="{ row }">
           <code class="role-key">{{ row.key }}</code>

@@ -76,6 +76,7 @@
         <span class="cb-range">{{ rangeText(group.items) }}</span>
       </div>
       <el-table :data="group.items" border class="cb-table" style="width: 100%">
+        <el-table-column type="index" label="序号" width="56" align="center" />
         <el-table-column label="服务项目 / 适用情况" min-width="360">
           <template slot-scope="{ row }">
             <div class="cell-name">

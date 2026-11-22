@@ -35,6 +35,7 @@
       highlight-current-row
       style="width: 100%"
     >
+      <el-table-column type="index" label="序号" width="60" align="center" />
       <el-table-column prop="sort" label="排序" width="80" align="center" />
       <el-table-column label="业务项" min-width="180">
         <template slot-scope="{ row }">

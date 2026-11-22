@@ -91,6 +91,12 @@
       style="width: 100%"
       @row-dblclick="handleRowDblclick"
     >
+      <!-- 序号只给主任务（执照）编号；细分任务留空，避免把子任务也数进去 -->
+      <el-table-column label="序号" width="60" align="center">
+        <template slot-scope="{ row }">
+          <span class="row-index">{{ mainIndex(row) }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="执照 / 客户" min-width="250" show-overflow-tooltip>
         <template slot-scope="{ row }">
           <div v-if="row._sub" class="sub-name">
@@ -761,6 +767,13 @@ export default {
       row.task_total = row.tasks.length
       row.task_done = row.tasks.filter(task => task.status === 'done').length
       return row
+    },
+    // 表格序号：细分任务跟着所属主任务走，主任务按列表顺序从 1 开始
+    mainIndex(row) {
+      if (!row) return ''
+      const main = row._sub && row._parent ? row._parent : row
+      const index = this.list.indexOf(main)
+      return index >= 0 ? index + 1 : ''
     },
     // 树形表格的行 key：主任务与细分任务是两张表，id 前缀区分，避免撞号
     rowKey(row) {

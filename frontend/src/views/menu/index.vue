@@ -19,6 +19,7 @@
       highlight-current-row
       style="width: 100%"
     >
+      <el-table-column type="index" label="序号" width="60" align="center" />
       <el-table-column label="菜单名称" min-width="180">
         <template slot-scope="{ row }">
           <svg-icon v-if="row.icon" :icon-class="row.icon" class="menu-icon" />

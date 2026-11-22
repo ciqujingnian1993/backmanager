@@ -34,6 +34,7 @@
       highlight-current-row
       style="width: 100%"
     >
+      <el-table-column type="index" label="序号" width="60" align="center" />
       <el-table-column label="类别" width="120" align="center">
         <template slot-scope="{ row }">
           <span class="cat-pill" :style="pillStyle(row.category)">{{ row.category }}</span>

@@ -120,6 +120,7 @@
         highlight-current-row
         style="width: 100%"
       >
+        <el-table-column type="index" label="序号" width="60" align="center" />
         <el-table-column type="expand">
           <template slot-scope="{ row }">
             <order-items-table :details="row.details" />

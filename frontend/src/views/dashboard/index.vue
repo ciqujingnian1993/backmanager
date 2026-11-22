@@ -142,6 +142,7 @@
         class="clickable-table"
         @row-click="openDetail"
       >
+        <el-table-column type="index" label="序号" width="56" align="center" />
         <el-table-column label="紧急度" width="92" align="center">
           <template slot-scope="{ row }">
             <el-tag :type="levelType(row.level)" size="mini">{{ levelText(row.level) }}</el-tag>
@@ -204,6 +205,7 @@
         class="clickable-table"
         @row-click="openDetail"
       >
+        <el-table-column type="index" label="序号" width="56" align="center" />
         <el-table-column prop="biz_date" label="日期" width="96" />
         <el-table-column prop="category" label="行业" width="110" />
         <el-table-column prop="client" label="客户" min-width="130" />

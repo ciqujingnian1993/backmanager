@@ -81,6 +81,7 @@
             <span class="panel-tip">一条明细含多个业务项时，收入会计入每一项</span>
           </div>
           <el-table :data="report.biz_item_rank" size="small" border>
+            <el-table-column type="index" label="序号" width="56" align="center" />
             <el-table-column label="业务项" min-width="140">
               <template slot-scope="{ row }">{{ row.name }}</template>
             </el-table-column>
@@ -108,6 +109,7 @@
             <span class="panel-tip">按收入排序</span>
           </div>
           <el-table :data="report.client_rank" size="small" border>
+            <el-table-column type="index" label="序号" width="56" align="center" />
             <el-table-column label="客户" min-width="130">
               <template slot-scope="{ row }">{{ row.name }}</template>
             </el-table-column>
@@ -129,6 +131,7 @@
         <span class="panel-tip">本月归属的全部订单</span>
       </div>
       <el-table :data="report.orders" size="small" border>
+        <el-table-column type="index" label="序号" width="56" align="center" />
         <el-table-column label="订单编号" width="148" align="center">
           <template slot-scope="{ row }">
             <span v-if="row.order_no" class="order-no-text">{{ row.order_no }}</span>
@@ -179,6 +182,7 @@
         <span class="panel-tip">其中关联订单 {{ money(relatedOpex) }} 元 · 独立支出 {{ money(report.summary.opex - relatedOpex) }} 元</span>
       </div>
       <el-table :data="report.costs" size="small" border>
+        <el-table-column type="index" label="序号" width="56" align="center" />
         <el-table-column label="业务日期" width="95" align="center">
           <template slot-scope="{ row }">{{ row.biz_date || '—' }}</template>
         </el-table-column>
